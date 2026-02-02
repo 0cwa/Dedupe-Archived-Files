@@ -1,0 +1,18 @@
+# Archive Duplicate Finder - Dependencies
+
+# TUI Framework
+textual>=0.50.0
+
+# Fast hashing
+xxhash>=3.4.0
+
+# Archive support
+py7zr>=0.20.0        # 7z files
+rarfile>=4.1         # RAR files
+libarchive-c>=5.0    # Universal archive support (tar, iso, etc.)
+
+# File operations
+send2trash>=1.8.2    # Safe trash operations
+
+# CLI
+click>=8.1.7         # Command-line interface

@@ -1,0 +1,13 @@
+[project]
+name = "dupsfromarchivecleaner"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.1.7",
+    "libarchive-c>=5.0",
+    "py7zr>=0.20.0",
+    "rarfile>=4.1",
+    "send2trash>=1.8.2",
+    "textual>=0.50.0",
+    "xxhash>=3.4.0",
+]

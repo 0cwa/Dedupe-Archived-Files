@@ -1,0 +1,168 @@
+/* Textual CSS for Archive Duplicate Finder */
+
+/* Overall theme - dark with colorful accents */
+Screen {
+    background: $surface;
+}
+
+/* Header styling */
+.header {
+    background: $primary;
+    color: $text;
+    text-style: bold;
+    height: 3;
+    content-align: center middle;
+}
+
+/* Archive names - bright accent color */
+.archive-name {
+    color: $accent;
+    text-style: bold;
+}
+
+/* File items */
+.file-selected {
+    color: $success;
+}
+
+.file-unselected {
+    color: $text-muted;
+}
+
+.file-warning {
+    color: $warning;
+    text-style: bold;
+}
+
+/* Paths */
+.path-source {
+    color: $primary;
+}
+
+.path-target {
+    color: $error;
+}
+
+/* Status indicators */
+.status-scanning {
+    color: $accent;
+    text-style: italic;
+}
+
+.status-complete {
+    color: $success;
+    text-style: bold;
+}
+
+.status-error {
+    color: $error;
+    text-style: bold;
+}
+
+/* Progress bars */
+ProgressBar {
+    color: $success;
+}
+
+/* Buttons */
+Button {
+    margin: 1;
+}
+
+Button.-primary {
+    background: $primary;
+    color: $text;
+}
+
+Button.-warning {
+    background: $warning;
+    color: $panel;
+}
+
+Button.-error {
+    background: $error;
+    color: $text;
+}
+
+Button:hover {
+    background: $primary-lighten-2;
+}
+
+/* Input fields */
+Input {
+    border: tall $primary;
+    background: $surface;
+}
+
+Input:focus {
+    border: tall $accent;
+}
+
+/* Lists and containers */
+ListView {
+    background: $surface;
+    border: tall $primary;
+}
+
+ListView > ListItem.--highlight {
+    background: $primary;
+}
+
+/* Checkboxes */
+Checkbox {
+    background: $surface;
+    border: none;
+}
+
+Checkbox:focus {
+    background: $boost;
+}
+
+/* Labels with highlights */
+.highlight-count {
+    background: $boost;
+    color: $text;
+    text-style: bold;
+}
+
+.highlight-size {
+    color: $warning;
+    text-style: bold;
+}
+
+/* Containers */
+Container {
+    background: $panel;
+    border: tall $primary;
+}
+
+Horizontal {
+    height: auto;
+}
+
+Vertical {
+    width: auto;
+}
+
+/* Footer with key bindings */
+.footer {
+    background: $panel;
+    color: $text-muted;
+    height: 1;
+}
+
+/* Nested archive indicator */
+.nested-archive {
+    color: $secondary;
+    text-style: italic;
+}
+
+/* Statistics display */
+.stat-label {
+    color: $text-muted;
+}
+
+.stat-value {
+    color: $accent;
+    text-style: bold;
+}
