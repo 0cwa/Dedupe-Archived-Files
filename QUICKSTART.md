@@ -2,10 +2,51 @@
 
 ## Installation
 
+### With uv (Recommended)
+```bash
+# Install uv if not already installed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create virtual environment and install
+uv venv
+uv pip install -r requirements.txt
+
+# Run
+uv run main.py
+```
+
+### With pip
 ```bash
 # Install dependencies
 pip install -r requirements.txt
 ```
+
+## Development & Testing
+
+### Running Tests
+```bash
+# Install dev dependencies
+uv pip install -e ".[dev]"
+
+# Run all tests
+uv run pytest tests/ -v
+
+# Run specific test file
+uv run pytest tests/test_models.py -v
+
+# Run with coverage
+uv run pytest tests/ --cov=core --cov=tui
+```
+
+### Test-Driven Development
+This project uses test-driven development (TDD). The test suite includes:
+- **test_models.py**: Data model tests (FileEntry, DuplicateMatch, ArchiveInfo, AppConfig)
+- **test_hasher.py**: Hash calculation tests with xxHash
+- **test_file_ops.py**: File deletion and size formatting tests
+- **test_extractor.py**: Archive extraction tests (ZIP, TAR, 7z, RAR)
+- **test_database.py**: SQLite database operations tests
+- **test_scanner.py**: Source and target scanner tests
+- **test_tui.py**: TUI component and navigation tests
 
 ## Basic Usage
 
@@ -97,12 +138,31 @@ python main.py -s /archives -t /data
 
 ## Keyboard Shortcuts (Interactive Mode)
 
+### Global
+- `q`: Quit application
+- `Esc`: Go back to previous screen
+
+### Main Screen
+- `s`: Open settings
+- `Enter`: Start scan (when directories configured)
+- Arrow keys: Navigate directory lists
+
+### Directory Selection
+- `Enter` or click "Add": Add directory
+- `Esc` or click "Cancel": Go back
+
+### Review Screen
 - `Space`: Toggle file selection
-- `a`: Select all
-- `n`: Deselect all
-- `q`: Quit
-- `Arrow keys`: Navigate
-- `Enter`: Confirm/Continue
+- `a`: Select all files
+- `n`: Deselect all files
+- `Esc`: Go back to scanning
+
+### Settings Screen
+- `Enter` or click "Save": Save settings
+- `Esc` or click "Cancel": Discard changes
+
+### Message/Dialog Screens
+- `Enter`, `Esc`, or click "OK": Dismiss dialog
 
 ## Tips
 

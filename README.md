@@ -20,16 +20,40 @@ A powerful, memory-efficient tool for finding and removing duplicate files from 
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.12+
 - System dependencies for archive formats:
   - `unrar` for RAR support (optional)
   - `libarchive` for extended format support (optional)
 
-### Install
+### Install with uv (Recommended)
+
+[uv](https://github.com/astral-sh/uv) is a fast Python package installer and resolver.
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd DupsFromArchiveCleaner
+
+# Create virtual environment and install dependencies
+uv venv
+uv pip install -r requirements.txt
+
+# Or use pyproject.toml directly
+uv pip install -e .
+
+# Run the application
+uv run main.py
+```
+
+### Install with pip
 
 ```bash
 # Clone or download the repository
 cd DupsFromArchiveCleaner
+
+# Create virtual environment (recommended)
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install Python dependencies
 pip install -r requirements.txt

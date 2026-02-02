@@ -1,6 +1,7 @@
 [project]
 name = "dupsfromarchivecleaner"
 version = "0.1.0"
+description = "A powerful, memory-efficient tool for finding and removing duplicate files from archives"
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.1.7",
@@ -11,3 +12,24 @@ dependencies = [
     "textual>=0.50.0",
     "xxhash>=3.4.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+asyncio_mode = "auto"
+
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"

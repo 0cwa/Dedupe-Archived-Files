@@ -151,27 +151,40 @@ class ArchiveExtractor:
         
         try:
             with py7zr.SevenZipFile(archive_path, 'r') as szf:
-                for name, bio in szf.read().items():
-                    if bio is None:  # Directory
+                # Get list of files
+                file_list = szf.list()
+                
+                for file_info in file_list:
+                    name = file_info.filename
+                    
+                    # Skip directories
+                    if name.endswith('/'):
                         continue
                     
                     try:
+                        # Read single file using the newer API
+                        szf.reset()
+                        file_dict = szf.read([name])
+                        
+                        if name not in file_dict:
+                            continue
+                            
+                        bio = file_dict[name]
                         data = bio.read() if hasattr(bio, 'read') else bio
+                        
                         if isinstance(data, bytes):
-                            stream = io.BytesIO(data)
                             size = len(data)
                         else:
-                            # py7zr returns file-like objects sometimes
-                            data_bytes = data.getvalue() if hasattr(data, 'getvalue') else data
-                            stream = io.BytesIO(data_bytes)
+                            data_bytes = data.getvalue() if hasattr(data, 'getvalue') else str(data).encode()
+                            data = data_bytes
                             size = len(data_bytes)
                         
                         is_nested = self.is_archive(name)
-                        yield (name, io.BytesIO(stream.getvalue()), size, is_nested)
+                        yield (name, io.BytesIO(data), size, is_nested)
                         
                         if is_nested and recursion_depth < self.max_recursion_depth:
                             with tempfile.NamedTemporaryFile(delete=False, suffix=Path(name).suffix) as tmp:
-                                tmp.write(stream.getvalue())
+                                tmp.write(data)
                                 tmp_path = tmp.name
                             
                             try:

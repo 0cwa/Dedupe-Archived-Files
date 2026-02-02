@@ -230,7 +230,7 @@ class DatabaseManager:
     def get_all_archives(self) -> List[str]:
         """Get list of all source archives in database."""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT DISTINCT source_archive FROM files ORDER BY source_archive")
+        cursor.execute("SELECT path FROM archives ORDER BY path")
         return [row[0] for row in cursor.fetchall()]
     
     def get_files_by_archive(self, archive_path: str) -> List[FileEntry]:

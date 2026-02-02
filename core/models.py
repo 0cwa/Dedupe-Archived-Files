@@ -53,7 +53,6 @@ class ArchiveInfo:
         """Get archive filename."""
         return Path(self.path).name
     
-    @property
     def needs_rescan(self, current_mtime: float, current_size: int) -> bool:
         """Check if archive has changed since last scan."""
         if self.last_scanned is None:

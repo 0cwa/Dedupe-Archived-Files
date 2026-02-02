@@ -136,6 +136,42 @@ Container {
     border: tall $primary;
 }
 
+#config-container {
+    padding: 1 2;
+    height: auto;
+}
+
+#directory-input-container {
+    padding: 2 4;
+    width: 60;
+    height: auto;
+}
+
+#settings-container {
+    padding: 1 2;
+    height: auto;
+}
+
+#scanning-container {
+    padding: 1 2;
+}
+
+#review-container {
+    padding: 1 2;
+}
+
+#confirmation-container {
+    padding: 2 4;
+    width: 80;
+    height: auto;
+}
+
+#message-container {
+    padding: 2 4;
+    width: 60;
+    height: auto;
+}
+
 Horizontal {
     height: auto;
 }
