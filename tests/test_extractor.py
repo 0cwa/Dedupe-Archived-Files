@@ -320,6 +320,44 @@ class TestErrorHandling:
         results = list(extractor.extract_archive(str(corrupted)))
         assert len(results) == 0
 
+    def test_extract_exe_sfx_zip(self, tmp_path):
+        """Test extraction from an .exe that is actually a ZIP SFX."""
+        exe_file = tmp_path / "installer.exe"
+        
+        # Create a ZIP file and save it as .exe
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            zf.writestr("test.txt", "hello")
+        exe_file.write_bytes(buf.getvalue())
+        
+        extractor = ArchiveExtractor()
+        results = list(extractor.extract_archive(str(exe_file)))
+        
+        assert len(results) == 1
+        assert results[0][0] == "test.txt"
+        assert results[0][1].read().decode() == "hello"
+
+    def test_extract_appimage_mock(self, tmp_path):
+        """Test extraction logic for AppImage offset detection."""
+        appimage_file = tmp_path / "test.appimage"
+        
+        # Create a ZIP file as payload
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            zf.writestr("app.txt", "app content")
+        payload = buf.getvalue()
+        
+        # ELF + Magic + Payload
+        appimage_file.write_bytes(b"ELF" + b"\x00" * 50 + b"hsqs" + payload)
+        
+        extractor = ArchiveExtractor()
+        # Mock HAS_LIBARCHIVE to ensure we test the logic even if libarchive is missing
+        # but here it is present.
+        results = list(extractor.extract_archive(str(appimage_file)))
+        
+        # In our mock, libarchive should find the ZIP at the offset
+        assert any(r[0] == "app.txt" for r in results)
+
 
 class TestExtract7z:
     """Tests for 7z extraction (requires py7zr)."""

@@ -98,24 +98,63 @@ class ArchiveExtractor:
             return
         
         path = Path(archive_path)
+        suffix = path.suffix.lower()
         
-        try:
-            # Try different extraction methods based on extension
-            if path.suffix.lower() == '.zip' or path.name.lower().endswith(('.jar', '.war', '.ear', '.zipx')):
-                yield from self._extract_zip(archive_path, recursion_depth)
-            elif path.suffix.lower() == '.7z' and HAS_7Z:
-                yield from self._extract_7z(archive_path, recursion_depth)
-            elif path.suffix.lower() == '.rar' and HAS_RAR:
-                yield from self._extract_rar(archive_path, recursion_depth)
-            elif path.name.lower().endswith(('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz', '.tar.zst', '.tzst')):
-                yield from self._extract_tar(archive_path, recursion_depth)
-            elif HAS_LIBARCHIVE:
-                yield from self._extract_libarchive(archive_path, recursion_depth)
-            else:
+        # Build list of potential handlers to try
+        handlers = []
+        
+        # Extension-based primary handlers
+        if suffix in ('.zip', '.zipx') or path.name.lower().endswith(('.jar', '.war', '.ear')):
+            handlers.append(self._extract_zip)
+        elif suffix == '.7z' and HAS_7Z:
+            handlers.append(self._extract_7z)
+        elif suffix == '.rar' and HAS_RAR:
+            handlers.append(self._extract_rar)
+        elif path.name.lower().endswith(('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz', '.tar.zst', '.tzst')):
+            handlers.append(self._extract_tar)
+        
+        # Format-specific fallback handlers (SFX, etc.)
+        if suffix == '.exe':
+            if HAS_7Z:
+                handlers.append(self._extract_7z)
+            handlers.append(self._extract_zip)
+        elif suffix in ('.appimage', '.run'):
+            handlers.append(self._extract_appimage)
+            if HAS_7Z:
+                handlers.append(self._extract_7z)
+        
+        # Always add libarchive as a fallback for other formats
+        if HAS_LIBARCHIVE and self._extract_libarchive not in handlers:
+            handlers.append(self._extract_libarchive)
+            
+        success = False
+        last_exception = None
+        
+        for handler in handlers:
+            try:
+                # Try to get at least one item from the generator
+                it = handler(archive_path, recursion_depth)
+                try:
+                    first_item = next(it)
+                    yield first_item
+                    yield from it
+                    success = True
+                    break # Success with this handler
+                except StopIteration:
+                    # No items yielded by this handler
+                    continue
+            except Exception as e:
+                logger.debug(f"Handler {handler.__name__} failed for {archive_path}: {e}")
+                last_exception = e
+                continue
+        
+        if not success:
+            if last_exception:
+                logger.error(f"Failed to extract {archive_path}: {last_exception}")
+            elif not handlers:
                 logger.error(f"No handler available for {archive_path}")
-        
-        except Exception as e:
-            logger.error(f"Failed to extract {archive_path}: {e}")
+            else:
+                logger.warning(f"Recognized archive but could not extract any files from {archive_path}")
     
     def _extract_zip(self, archive_path: str, recursion_depth: int) -> Generator:
         """Extract ZIP archive."""
@@ -319,6 +358,33 @@ class ArchiveExtractor:
         except Exception as e:
             logger.error(f"Failed to open archive with libarchive {archive_path}: {e}")
     
+    def _extract_appimage(self, archive_path: str, recursion_depth: int) -> Generator:
+        """Specialized extractor for AppImage (SquashFS)."""
+        # Try finding SquashFS offset for Type 2 AppImages
+        try:
+            with open(archive_path, 'rb') as f:
+                # Read first 1MB to find SquashFS magic
+                head = f.read(1024 * 1024)
+                offset = head.find(b'hsqs')
+                if offset != -1:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.squashfs') as tmp:
+                        f.seek(offset)
+                        shutil.copyfileobj(f, tmp)
+                        tmp_path = tmp.name
+                    
+                    try:
+                        if HAS_LIBARCHIVE:
+                            yield from self._extract_libarchive(tmp_path, recursion_depth)
+                    finally:
+                        Path(tmp_path).unlink(missing_ok=True)
+                    return 
+        except Exception as e:
+            logger.debug(f"AppImage offset extraction failed: {e}")
+
+        # Fallback to normal libarchive
+        if HAS_LIBARCHIVE:
+            yield from self._extract_libarchive(archive_path, recursion_depth)
+
     def _extract_nested(self, temp_path: str, original_name: str, parent_recursion_depth: int) -> Generator:
         """Helper to extract nested archives with proper path tracking."""
         for nested_rel_path, nested_stream, nested_size, nested_is_archive in self.extract_archive(temp_path, parent_recursion_depth + 1):
