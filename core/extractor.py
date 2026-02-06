@@ -40,11 +40,23 @@ class ArchiveExtractor:
     
     # Archive extensions we can handle
     ARCHIVE_EXTENSIONS = {
-        '.zip', '.jar', '.war', '.ear',
+        # Common archives
+        '.zip', '.jar', '.war', '.ear', '.zipx',
         '.7z',
         '.rar',
-        '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz',
-        '.iso', '.img',  # Disk images (via libarchive)
+        '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz', '.tar.zst', '.tzst',
+        
+        # Package formats
+        '.rpm', '.deb', '.msi', '.cab', '.ar', '.xar', '.pkg',
+        
+        # Executables and App Images
+        '.exe', '.appimage', '.run',
+        
+        # Disk and filesystem images
+        '.iso', '.img', '.dmg', '.vmdk', '.vdi', '.vhd', '.squashfs',
+        
+        # Other formats
+        '.cpio', '.wim', '.lzh', '.lha', '.lz',
     }
     
     def __init__(self, max_recursion_depth: int = 10):
@@ -89,13 +101,13 @@ class ArchiveExtractor:
         
         try:
             # Try different extraction methods based on extension
-            if path.suffix.lower() == '.zip' or path.name.lower().endswith(('.jar', '.war', '.ear')):
+            if path.suffix.lower() == '.zip' or path.name.lower().endswith(('.jar', '.war', '.ear', '.zipx')):
                 yield from self._extract_zip(archive_path, recursion_depth)
             elif path.suffix.lower() == '.7z' and HAS_7Z:
                 yield from self._extract_7z(archive_path, recursion_depth)
             elif path.suffix.lower() == '.rar' and HAS_RAR:
                 yield from self._extract_rar(archive_path, recursion_depth)
-            elif path.name.lower().endswith(('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz')):
+            elif path.name.lower().endswith(('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz', '.tar.zst', '.tzst')):
                 yield from self._extract_tar(archive_path, recursion_depth)
             elif HAS_LIBARCHIVE:
                 yield from self._extract_libarchive(archive_path, recursion_depth)

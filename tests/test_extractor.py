@@ -68,7 +68,19 @@ class TestIsArchive:
     def test_is_archive_iso(self):
         """Test ISO detection."""
         assert ArchiveExtractor.is_archive("disk.iso") is True
-    
+        assert ArchiveExtractor.is_archive("image.img") is True
+
+    def test_is_archive_packages(self):
+        """Test package format detection."""
+        assert ArchiveExtractor.is_archive("package.rpm") is True
+        assert ArchiveExtractor.is_archive("package.deb") is True
+        assert ArchiveExtractor.is_archive("installer.msi") is True
+
+    def test_is_archive_executables(self):
+        """Test executable archive detection."""
+        assert ArchiveExtractor.is_archive("program.exe") is True
+        assert ArchiveExtractor.is_archive("app.appimage") is True
+
     def test_is_archive_java(self):
         """Test Java archive detection."""
         assert ArchiveExtractor.is_archive("app.jar") is True
@@ -355,6 +367,10 @@ class TestSupportedExtensions:
         assert '.tar.bz2' in extensions
         assert '.tar.xz' in extensions
         assert '.iso' in extensions
+        assert '.rpm' in extensions
+        assert '.deb' in extensions
+        assert '.exe' in extensions
+        assert '.appimage' in extensions
     
     def test_java_archives_supported(self):
         """Test Java archive formats."""
