@@ -45,6 +45,15 @@ class SourceScanner:
         Returns:
             Dictionary mapping archive paths to ArchiveInfo objects
         """
+        # Report that we're finding archives
+        if self.progress_callback:
+            self.progress_callback(ScanProgress(
+                phase="source_scan",
+                current_archive="Finding archives...",
+                archives_processed=0,
+                total_archives=0
+            ))
+        
         # Find all archives
         archives = []
         for source_dir in self.config.source_dirs:
@@ -215,7 +224,17 @@ class TargetScanner:
         
         logger.info(f"Found {len(target_files)} files in target directories")
         
+        # Report total files found before starting scan
+        if self.progress_callback:
+            progress = ScanProgress(
+                phase="target_scan",
+                total_files=len(target_files),
+                files_processed=0
+            )
+            self.progress_callback(progress)
+        
         # Check each file for duplicates
+        match_count = 0
         for idx, filepath in enumerate(target_files):
             try:
                 matches = self._check_file(filepath, idx, len(target_files))
@@ -226,6 +245,18 @@ class TargetScanner:
                     if archive_path not in duplicates_by_archive:
                         duplicates_by_archive[archive_path] = []
                     duplicates_by_archive[archive_path].append(match)
+                    match_count += 1
+                
+                # Report progress every 10 files for smoother updates
+                if self.progress_callback and idx % 10 == 0:
+                    progress = ScanProgress(
+                        phase="target_scan",
+                        current_file=filepath,
+                        files_processed=idx,
+                        total_files=len(target_files),
+                        archives_processed=match_count
+                    )
+                    self.progress_callback(progress)
             
             except Exception as e:
                 logger.error(f"Failed to check file {filepath}: {e}")
@@ -273,16 +304,6 @@ class TargetScanner:
             
             # Hash the file
             full_hash, quick_hash = self.hasher.hash_file(filepath, file_size)
-            
-            # Update progress
-            if self.progress_callback and file_idx % 100 == 0:
-                progress = ScanProgress(
-                    phase="target_scan",
-                    current_file=filepath,
-                    files_processed=file_idx,
-                    total_files=total_files
-                )
-                self.progress_callback(progress)
             
             # Look for matches
             matches = []

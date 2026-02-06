@@ -6,8 +6,10 @@ from textual.containers import Container, Horizontal, Vertical, ScrollableContai
 from textual.widgets import Header, Footer, Button, Static, Input, Label, ListView, ListItem, ProgressBar, Checkbox
 from textual.binding import Binding
 from textual.screen import Screen
+from textual.worker import Worker
 from pathlib import Path
 import logging
+import asyncio
 from typing import List, Dict, Optional
 
 from core.models import AppConfig, DuplicateMatch, ArchiveInfo, ScanProgress
@@ -305,14 +307,16 @@ class ScanningScreen(Screen):
         self.db = None
         self.duplicates_by_archive = {}
         self._cancelled = False
+        self._progress_queue = asyncio.Queue()
+        self._scan_complete = asyncio.Event()
     
     def compose(self) -> ComposeResult:
         yield Container(
             Static("🔍 Scanning...", classes="header"),
             Label(""),
             Label("Phase 1: Scanning source archives...", id="phase-label", classes="status-scanning"),
-            ProgressBar(total=100, show_eta=True, id="progress"),
-            Label("", id="status-label"),
+            ProgressBar(total=100, show_eta=False, id="progress"),
+            Label("Initializing...", id="status-label"),
             Label("", id="current-file-label"),
             Label(""),
             Button("❌ Cancel", id="cancel-btn"),
@@ -321,75 +325,138 @@ class ScanningScreen(Screen):
     
     async def on_mount(self) -> None:
         """Start scanning when screen is mounted."""
-        await self.run_scan()
+        # Start progress update handler
+        self.run_worker(self._progress_updater(), thread=False)
+        # Start scanning in background worker
+        self.run_worker(self._do_scan(), thread=True)
     
-    async def run_scan(self) -> None:
-        """Run the scanning process."""
+    async def _progress_updater(self) -> None:
+        """Handle progress updates from the scan worker."""
+        while not self._scan_complete.is_set() or not self._progress_queue.empty():
+            try:
+                progress = await asyncio.wait_for(self._progress_queue.get(), timeout=0.1)
+                await self._update_ui(progress)
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                logger.debug(f"Progress update error: {e}")
+    
+    async def _update_ui(self, progress: ScanProgress) -> None:
+        """Update UI with progress information."""
+        if self._cancelled:
+            return
+        try:
+            phase_label = self.query_one("#phase-label", Label)
+            status_label = self.query_one("#status-label", Label)
+            file_label = self.query_one("#current-file-label", Label)
+            progress_bar = self.query_one("#progress", ProgressBar)
+            
+            # Update phase label
+            if progress.phase == "source_scan":
+                phase_label.update("Phase 1: Scanning source archives...")
+                if progress.total_archives > 0:
+                    status_label.update(
+                        f"Archive {progress.archives_processed}/{progress.total_archives}"
+                        + (f" | Files: {progress.files_processed}" if progress.files_processed > 0 else "")
+                    )
+                    pct = (progress.archives_processed / progress.total_archives) * 100
+                    progress_bar.update(progress=pct)
+                else:
+                    status_label.update("Finding archives...")
+                    
+            elif progress.phase == "target_scan":
+                phase_label.update("Phase 2: Scanning target directories...")
+                if progress.total_files > 0:
+                    status_label.update(
+                        f"File {progress.files_processed}/{progress.total_files}"
+                        + (f" | Matches: {progress.archives_processed}" if progress.archives_processed > 0 else "")
+                    )
+                    pct = (progress.files_processed / progress.total_files) * 100
+                    progress_bar.update(progress=pct)
+                else:
+                    status_label.update("Finding files...")
+                    
+            elif progress.phase == "complete":
+                phase_label.update("✅ Scan complete!", classes="status-complete")
+                progress_bar.update(progress=100)
+                total_dupes = progress.files_processed
+                status_label.update(
+                    f"Found {total_dupes} duplicate files across {progress.archives_processed} archives"
+                )
+                file_label.update("")
+                # Update button
+                cancel_btn = self.query_one("#cancel-btn", Button)
+                cancel_btn.label = "Continue →"
+                cancel_btn.id = "continue-btn"
+                return
+            
+            # Update current file label
+            if progress.current_file:
+                file_label.update(f"Current: {Path(progress.current_file).name}")
+            elif progress.current_archive:
+                file_label.update(f"Archive: {Path(progress.current_archive).name}")
+            else:
+                file_label.update("")
+                
+        except Exception as e:
+            logger.debug(f"UI update error: {e}")
+    
+    def _do_scan(self) -> None:
+        """Run the scanning process in a background thread."""
         try:
             # Connect to database
             self.db = DatabaseManager(self.config.db_path)
             self.db.connect()
             
-            def update_progress(progress: ScanProgress):
+            def queue_progress(progress: ScanProgress):
                 if self._cancelled:
                     return
                 try:
-                    self.query_one("#status-label", Label).update(
-                        f"Archives: {progress.archives_processed}/{progress.total_archives} | "
-                        f"Files: {progress.files_processed}"
-                    )
-                    if progress.current_file:
-                        self.query_one("#current-file-label", Label).update(f"Current: {progress.current_file}")
-                    
-                    # Update progress bar
-                    if progress.total_archives > 0:
-                        pct = (progress.archives_processed / progress.total_archives) * 100
-                        self.query_one("#progress", ProgressBar).update(progress=pct)
-                except Exception:
-                    pass  # Widget might be gone
+                    # Use call_from_thread to safely put to async queue
+                    self.app.call_from_thread(self._progress_queue.put_nowait, progress)
+                except Exception as e:
+                    logger.debug(f"Queue progress error: {e}")
             
             # Phase 1: Scan source archives
-            self.query_one("#phase-label", Label).update("Phase 1: Scanning source archives...")
-            source_scanner = SourceScanner(self.config, self.db, progress_callback=update_progress)
+            source_scanner = SourceScanner(self.config, self.db, progress_callback=queue_progress)
             archive_infos = source_scanner.scan_source_directories()
             
             if self._cancelled:
                 return
             
             # Phase 2: Scan target directories
-            self.query_one("#phase-label", Label).update("Phase 2: Scanning target directories...")
-            self.query_one("#progress", ProgressBar).update(progress=0)
-            target_scanner = TargetScanner(self.config, self.db, progress_callback=update_progress)
+            target_scanner = TargetScanner(self.config, self.db, progress_callback=queue_progress)
             self.duplicates_by_archive = target_scanner.scan_target_directories()
             
             if self._cancelled:
                 return
             
-            # Done
-            self.query_one("#phase-label", Label).update("✅ Scan complete!", classes="status-complete")
-            self.query_one("#progress", ProgressBar).update(progress=100)
-            
+            # Signal completion
             total_dupes = sum(len(v) for v in self.duplicates_by_archive.values())
-            self.query_one("#status-label", Label).update(
-                f"Found {total_dupes} duplicate files across {len(self.duplicates_by_archive)} archives"
+            completion_progress = ScanProgress(
+                phase="complete",
+                files_processed=total_dupes,
+                archives_processed=len(self.duplicates_by_archive)
             )
-            self.query_one("#current-file-label", Label).update("")
+            queue_progress(completion_progress)
             
-            # Update button
-            cancel_btn = self.query_one("#cancel-btn", Button)
-            cancel_btn.label = "Continue →"
-            cancel_btn.id = "continue-btn"
-        
         except Exception as e:
             logger.error(f"Scan failed: {e}")
             try:
-                self.query_one("#phase-label", Label).update(f"❌ Error: {str(e)}", classes="status-error")
+                error_progress = ScanProgress(
+                    phase="error",
+                    current_file=str(e)
+                )
+                queue_progress(error_progress)
             except Exception:
                 pass
+        finally:
+            self._scan_complete.set()
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel-btn":
             self._cancelled = True
+            self._scan_complete.set()
             if self.db:
                 self.db.close()
             self.app.pop_screen()
@@ -406,6 +473,7 @@ class ScanningScreen(Screen):
     def action_quit(self) -> None:
         """Quit the application."""
         self._cancelled = True
+        self._scan_complete.set()
         if self.db:
             self.db.close()
         self.app.exit()
