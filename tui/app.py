@@ -246,16 +246,13 @@ class SettingsScreen(Screen):
     ]
     
     def compose(self) -> ComposeResult:
-        # Find the current option index
-        current_value = self.config.delete_method
-        
         yield Container(
             Static("⚙️  Settings", classes="header"),
             Label(""),
             Label("Delete method:", classes="setting-label"),
             Select(
                 self.DELETE_OPTIONS,
-                value=current_value,
+                value=self.config.delete_method,
                 id="delete-method-select",
                 prompt="Select delete method...",
             ),
@@ -276,10 +273,6 @@ class SettingsScreen(Screen):
             ),
             id="settings-container"
         )
-    
-    def on_mount(self) -> None:
-        """Initialize settings."""
-        self.query_one("#delete-method-select", Select).value = self.config.delete_method
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save-btn":
@@ -400,7 +393,8 @@ class ScanningScreen(Screen):
                     
             elif progress.phase == "complete":
                 self._is_ui_complete = True
-                phase_label.update("✅ Scan complete!", classes="status-complete")
+                phase_label.update("✅ Scan complete!")
+                phase_label.add_class("status-complete")
                 progress_bar.update(progress=100)
                 total_dupes = progress.files_processed
                 status_label.update(
@@ -532,6 +526,7 @@ class ReviewScreen(Screen):
         self.db = None
         self.duplicates_by_archive = duplicates_by_archive
         self.current_selections = {}
+        self.item_map = {}  # index -> (key, match, label)
         
         # Initialize selections
         for archive, matches in duplicates_by_archive.items():
@@ -558,16 +553,27 @@ class ReviewScreen(Screen):
     def compose(self) -> ComposeResult:
         # Build duplicate list
         items = []
+        self.item_map = {}
+        idx = 0
+        
         for archive_path, matches in self.duplicates_by_archive.items():
             archive_name = Path(archive_path).name
             items.append(ListItem(Label(f"📦 {archive_name} ({len(matches)} duplicates)", classes="archive-name")))
+            idx += 1
             
-            for match in matches[:10]:  # Show first 10
-                checkbox_mark = "[X]" if match.selected_for_deletion else "[ ]"
+            for match in matches:
+                key = (match.source_file.full_hash or match.source_file.quick_hash, match.target_path)
+                selected = self.current_selections.get(key, True)
+                
+                checkbox_mark = "[X]" if selected else "[ ]"
                 size_str = FileOperations.format_size(match.target_size)
-                items.append(ListItem(
-                    Label(f"  {checkbox_mark} {match.source_file.filename} → {match.target_path} ({size_str})")
-                ))
+                
+                label_text = f"  {checkbox_mark} {match.source_file.filename} → {match.target_path} ({size_str})"
+                label = Label(label_text, classes="file-selected" if selected else "file-unselected")
+                
+                items.append(ListItem(label))
+                self.item_map[idx] = (key, match, label)
+                idx += 1
         
         yield Container(
             Static("📋 Review Duplicates", classes="header"),
@@ -578,8 +584,8 @@ class ReviewScreen(Screen):
             ),
             Horizontal(
                 Button("← Back", id="back-btn"),
-                Button("Select All", id="select-all-btn"),
-                Button("Deselect All", id="deselect-all-btn"),
+                Button("Select All (A)", id="select-all-btn"),
+                Button("Deselect All (N)", id="deselect-all-btn"),
                 Button("Continue →", id="continue-btn", variant="primary"),
             ),
             id="review-container"
@@ -609,15 +615,41 @@ class ReviewScreen(Screen):
         else:
             self.app.push_screen(MessageScreen("No Selection", "No files selected for deletion."))
     
+    def action_toggle_selection(self) -> None:
+        """Toggle selection of the current item."""
+        list_view = self.query_one("#dup-list", ListView)
+        idx = list_view.index
+        if idx is not None and idx in self.item_map:
+            key, match, label = self.item_map[idx]
+            new_state = not self.current_selections.get(key, True)
+            self.current_selections[key] = new_state
+            
+            # Update UI
+            self._update_item_ui(key, match, label, new_state)
+
+    def _update_item_ui(self, key, match, label, selected) -> None:
+        """Update a single item's UI state."""
+        checkbox_mark = "[X]" if selected else "[ ]"
+        size_str = FileOperations.format_size(match.target_size)
+        label.update(f"  {checkbox_mark} {match.source_file.filename} → {match.target_path} ({size_str})")
+        if selected:
+            label.add_class("file-selected")
+            label.remove_class("file-unselected")
+        else:
+            label.add_class("file-unselected")
+            label.remove_class("file-selected")
+
     def action_select_all(self) -> None:
-        for key in self.current_selections:
+        """Select all duplicates."""
+        for idx, (key, match, label) in self.item_map.items():
             self.current_selections[key] = True
-        self.refresh()
+            self._update_item_ui(key, match, label, True)
     
     def action_deselect_all(self) -> None:
-        for key in self.current_selections:
+        """Deselect all duplicates."""
+        for idx, (key, match, label) in self.item_map.items():
             self.current_selections[key] = False
-        self.refresh()
+            self._update_item_ui(key, match, label, False)
     
     def action_go_back(self) -> None:
         """Go back to previous screen."""
@@ -628,6 +660,7 @@ class ReviewScreen(Screen):
         """Quit the application."""
         self._close_db()
         self.app.exit()
+
 
 
 class ConfirmationScreen(Screen):
