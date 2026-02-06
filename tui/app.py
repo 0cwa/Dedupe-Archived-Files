@@ -20,17 +20,17 @@ logger = logging.getLogger(__name__)
 
 class ConfigScreen(Screen):
     """Initial configuration screen."""
-    
+
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("s", "settings", "Settings"),
         Binding("enter", "start_scan", "Start Scan"),
     ]
-    
+
     def __init__(self, config: AppConfig):
         super().__init__()
         self.config = config
-    
+
     def compose(self) -> ComposeResult:
         yield Header()
         yield Container(
@@ -58,6 +58,10 @@ class ConfigScreen(Screen):
             id="config-container"
         )
         yield Footer()
+
+    def action_quit(self) -> None:
+        """Quit the application."""
+        self.app.exit()
     
     def on_mount(self) -> None:
         """Update the lists when screen is mounted."""

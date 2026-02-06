@@ -141,6 +141,18 @@ Container {
     height: auto;
 }
 
+#source-list {
+    height: 6;
+    border: tall $primary;
+    background: $surface;
+}
+
+#target-list {
+    height: 6;
+    border: tall $primary;
+    background: $surface;
+}
+
 #directory-input-container {
     padding: 2 4;
     width: 60;
