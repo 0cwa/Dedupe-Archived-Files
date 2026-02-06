@@ -246,7 +246,10 @@ class ScanningScreen(Screen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel-btn":
             if self.db:
-                self.db.close()
+                try:
+                    self.db.close()
+                except Exception:
+                    pass
             self.app.pop_screen()
         elif event.button.id == "continue-btn":
             # Go to review screen
@@ -255,7 +258,10 @@ class ScanningScreen(Screen):
             else:
                 self.app.push_screen(MessageScreen("No Duplicates", "No duplicate files were found."))
                 if self.db:
-                    self.db.close()
+                    try:
+                        self.db.close()
+                    except Exception:
+                        pass
                 self.app.pop_screen()
 
 
@@ -312,7 +318,11 @@ class ReviewScreen(Screen):
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back-btn":
-            self.db.close()
+            if self.db:
+                try:
+                    self.db.close()
+                except Exception:
+                    pass
             self.app.pop_screen()
         elif event.button.id == "select-all-btn":
             self.action_select_all()
@@ -393,7 +403,11 @@ class ConfirmationScreen(Screen):
                 result_msg += f"\n{len(failures)} files failed"
             
             self.app.push_screen(MessageScreen("Complete", result_msg))
-            self.db.close()
+            if self.db:
+                try:
+                    self.db.close()
+                except Exception:
+                    pass
 
 
 class MessageScreen(Screen):
