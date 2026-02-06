@@ -324,9 +324,25 @@ class TargetScanner:
         try:
             stat = Path(filepath).stat()
             file_size = stat.st_size
+            mtime = stat.st_mtime
             
-            # Hash the file
-            full_hash, quick_hash = self.hasher.hash_file(filepath, file_size)
+            full_hash = None
+            quick_hash = None
+            
+            # Check if we have a cached hash
+            if not self.config.recheck_targets:
+                cached = self.db.get_target_file_info(filepath)
+                if cached:
+                    cached_mtime, cached_size, cached_full_hash, cached_quick_hash = cached
+                    if cached_mtime == mtime and cached_size == file_size:
+                        full_hash = cached_full_hash
+                        quick_hash = cached_quick_hash
+            
+            # If not cached or recheck requested, compute hashes
+            if full_hash is None and quick_hash is None:
+                full_hash, quick_hash = self.hasher.hash_file(filepath, file_size)
+                # Store what we have so far
+                self.db.update_target_file(filepath, mtime, file_size, full_hash, quick_hash)
             
             # Look for matches
             matches = []
@@ -354,6 +370,9 @@ class TargetScanner:
                     # Compute full hash to verify
                     full_hash = self.hasher.compute_full_hash_for_quick(filepath)
                     if full_hash:
+                        # Update cache with full hash
+                        self.db.update_target_file(filepath, mtime, file_size, full_hash, quick_hash)
+                        
                         source_files = self.db.find_by_full_hash(full_hash)
                         for source_file in source_files:
                             stored_state = self.db.get_selection_state(full_hash, filepath)

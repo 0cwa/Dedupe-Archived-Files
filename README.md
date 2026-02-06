@@ -12,9 +12,9 @@ A powerful, memory-efficient tool for finding and removing duplicate files from 
 - 🎨 **Modern TUI**: Colorful, interactive interface built with Textual
 - 🗑️ **Safe deletion**: Move to trash by default, with permanent delete option
 - 🔍 **Incremental scanning**: Only re-scans changed archives
-- 🛡️ **Archive change detection**: Tracks modification times to skip unchanged archives
+- 🛡️ **Change detection**: Tracks modification times to skip unchanged archives and target files
 - 📊 **Progress tracking**: Real-time progress for all scanning operations
-- 🎯 **Flexible configuration**: CLI options or interactive configuration
+- 🎯 **Flexible configuration**: CLI options or interactive configuration (including recheck options)
 
 ## Installation
 

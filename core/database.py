@@ -88,6 +88,17 @@ class DatabaseManager:
             ON files(source_archive)
         """)
         
+        # Target files table - track target files and their hashes
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS target_files (
+                path TEXT PRIMARY KEY,
+                mtime REAL NOT NULL,
+                size INTEGER NOT NULL,
+                full_hash TEXT,
+                quick_hash TEXT
+            )
+        """)
+        
         # Selection state table - track user's deletion choices
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS selection_state (
@@ -105,6 +116,7 @@ class DatabaseManager:
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM archives")
         cursor.execute("DELETE FROM files")
+        cursor.execute("DELETE FROM target_files")
         cursor.execute("DELETE FROM selection_state")
         self.conn.commit()
         logger.info("Database cleared")
@@ -143,6 +155,33 @@ class DatabaseManager:
             INSERT OR REPLACE INTO archives (path, mtime, size, last_scanned, file_count)
             VALUES (?, ?, ?, ?, ?)
         """, (archive_path, mtime, size, datetime.now().timestamp(), file_count))
+        self.conn.commit()
+
+    def get_target_file_info(self, path: str) -> Optional[Tuple[float, int, Optional[str], Optional[str]]]:
+        """
+        Get stored hash info for a target file.
+        
+        Returns:
+            Tuple of (mtime, size, full_hash, quick_hash) or None
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT mtime, size, full_hash, quick_hash
+            FROM target_files WHERE path = ?
+        """, (path,))
+        row = cursor.fetchone()
+        if row:
+            return (row['mtime'], row['size'], row['full_hash'], row['quick_hash'])
+        return None
+
+    def update_target_file(self, path: str, mtime: float, size: int, 
+                           full_hash: Optional[str], quick_hash: Optional[str]):
+        """Update or insert target file hash information."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO target_files (path, mtime, size, full_hash, quick_hash)
+            VALUES (?, ?, ?, ?, ?)
+        """, (path, mtime, size, full_hash, quick_hash))
         self.conn.commit()
     
     def add_file(self, file_entry: FileEntry):
