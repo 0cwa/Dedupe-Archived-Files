@@ -29,6 +29,10 @@ filterwarnings = [
     "ignore::DeprecationWarning",
 ]
 asyncio_mode = "auto"
+markers = [
+    "extensive: marks tests as extensive integration tests (run with --extensive)",
+    "slow: marks tests as slow running",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

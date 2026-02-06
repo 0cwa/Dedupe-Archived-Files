@@ -3,7 +3,7 @@ Main Textual application for Archive Duplicate Finder.
 """
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.widgets import Header, Footer, Button, Static, Input, Label, ListView, ListItem, ProgressBar, Checkbox
+from textual.widgets import Header, Footer, Button, Static, Input, Label, ListView, ListItem, ProgressBar, Checkbox, Select
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.worker import Worker
@@ -239,14 +239,27 @@ class SettingsScreen(Screen):
         super().__init__()
         self.config = config
     
+    # Options for delete method select
+    DELETE_OPTIONS = [
+        ("🗑️  Move to Trash (safer)", "trash"),
+        ("⚠️  Permanent Delete (cannot be undone)", "permanent"),
+    ]
+    
     def compose(self) -> ComposeResult:
+        # Find the current option index
+        current_value = self.config.delete_method
+        
         yield Container(
             Static("⚙️  Settings", classes="header"),
             Label(""),
-            Horizontal(
-                Label("Delete method: "),
-                Button(f"[{self.config.delete_method.upper()}]", id="toggle-delete-method"),
+            Label("Delete method:", classes="setting-label"),
+            Select(
+                self.DELETE_OPTIONS,
+                value=current_value,
+                id="delete-method-select",
+                prompt="Select delete method...",
             ),
+            Label(""),
             Checkbox("Keep database", value=self.config.keep_database, id="keep-db"),
             Checkbox("Recheck archives", value=self.config.recheck_archives, id="recheck"),
             Checkbox("Auto-select duplicates", value=self.config.auto_select_duplicates, id="auto-select"),
@@ -269,12 +282,14 @@ class SettingsScreen(Screen):
             self._save_settings()
         elif event.button.id == "cancel-btn":
             self.action_go_back()
-        elif event.button.id == "toggle-delete-method":
-            self.config.delete_method = "permanent" if self.config.delete_method == "trash" else "trash"
-            event.button.label = f"[{self.config.delete_method.upper()}]"
     
     def _save_settings(self) -> None:
         """Save settings and go back."""
+        # Get delete method from Select widget
+        select_widget = self.query_one("#delete-method-select", Select)
+        if select_widget.value is not None:
+            self.config.delete_method = select_widget.value
+        
         self.config.keep_database = self.query_one("#keep-db", Checkbox).value
         self.config.recheck_archives = self.query_one("#recheck", Checkbox).value
         self.config.auto_select_duplicates = self.query_one("#auto-select", Checkbox).value

@@ -118,6 +118,28 @@ Checkbox:focus {
     background: $boost;
 }
 
+/* Select widget */
+Select {
+    background: $surface;
+    border: tall $primary;
+    height: 3;
+}
+
+Select:focus {
+    border: tall $accent;
+}
+
+Select > .select--current {
+    color: $text;
+}
+
+/* Settings labels */
+.setting-label {
+    color: $text;
+    text-style: bold;
+    margin: 1 0 0 0;
+}
+
 /* Labels with highlights */
 .highlight-count {
     background: $boost;
