@@ -341,9 +341,9 @@ class ScanningScreen(Screen):
     async def on_mount(self) -> None:
         """Start scanning when screen is mounted."""
         # Start progress update handler
-        self.run_worker(self._progress_updater(), thread=False)
-        # Start scanning in background worker
-        self.run_worker(self._do_scan(), thread=True)
+        self.run_worker(self._progress_updater(), group="scan_workers")
+        # Start scanning in background worker (pass method reference, not result)
+        self.run_worker(self._do_scan, thread=True, group="scan_workers")
     
     async def _progress_updater(self) -> None:
         """Handle progress updates from the scan worker."""
