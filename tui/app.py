@@ -63,15 +63,15 @@ class ConfigScreen(Screen):
         """Quit the application."""
         self.app.exit()
     
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         """Update the lists when screen is mounted."""
-        self._update_lists()
+        await self._update_lists()
     
-    def _update_lists(self) -> None:
+    async def _update_lists(self) -> None:
         """Update the source and target lists from config."""
         # Update source list
         source_list = self.query_one("#source-list", ListView)
-        source_list.clear()
+        await source_list.clear()
         for idx, src in enumerate(self.config.source_dirs):
             source_list.append(ListItem(
                 Label(f"  • {src}", classes="path-source"),
@@ -82,7 +82,7 @@ class ConfigScreen(Screen):
         
         # Update target list
         target_list = self.query_one("#target-list", ListView)
-        target_list.clear()
+        await target_list.clear()
         for idx, tgt in enumerate(self.config.target_dirs):
             target_list.append(ListItem(
                 Label(f"  • {tgt}", classes="path-target"),
@@ -91,24 +91,24 @@ class ConfigScreen(Screen):
         if not self.config.target_dirs:
             target_list.append(ListItem(Label("  (No target directories added)", classes="text-muted")))
     
-    def action_remove_source(self) -> None:
+    async def action_remove_source(self) -> None:
         """Remove selected source directory."""
         source_list = self.query_one("#source-list", ListView)
         if source_list.index is not None:
             idx = source_list.index
             if 0 <= idx < len(self.config.source_dirs):
                 removed = self.config.source_dirs.pop(idx)
-                self._update_lists()
+                await self._update_lists()
                 self.app.push_screen(MessageScreen("Removed", f"Removed source: {removed}"))
     
-    def action_remove_target(self) -> None:
+    async def action_remove_target(self) -> None:
         """Remove selected target directory."""
         target_list = self.query_one("#target-list", ListView)
         if target_list.index is not None:
             idx = target_list.index
             if 0 <= idx < len(self.config.target_dirs):
                 removed = self.config.target_dirs.pop(idx)
-                self._update_lists()
+                await self._update_lists()
                 self.app.push_screen(MessageScreen("Removed", f"Removed target: {removed}"))
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -133,10 +133,10 @@ class ConfigScreen(Screen):
         elif event.button.id == "quit-btn":
             self.app.exit()
     
-    def _on_directory_added(self, result: Optional[str]) -> None:
+    async def _on_directory_added(self, result: Optional[str]) -> None:
         """Callback when directory input screen closes."""
         if result:
-            self._update_lists()
+            await self._update_lists()
     
     def action_settings(self) -> None:
         """Open settings screen."""
