@@ -80,12 +80,14 @@ class ConfigScreen(Screen):
         method = "🗑️ Trash" if self.config.delete_method == "trash" else "⚠️ Permanent"
         keep_db = "Yes" if self.config.keep_database else "No"
         recheck = "Yes" if self.config.recheck_archives else "No"
+        recheck_tgt = "Yes" if self.config.recheck_targets else "No"
         dry_run = " [DRY RUN]" if self.config.dry_run else ""
         
         summary.update(
             f"Delete: [b]{method}[/b]{dry_run} | "
             f"Keep DB: {keep_db} | "
-            f"Recheck: {recheck} | "
+            f"Recheck Arc: {recheck} | "
+            f"Recheck Tgt: {recheck_tgt} | "
             f"Min Size: {FileOperations.format_size(self.config.min_file_size)}"
         )
     
@@ -276,6 +278,8 @@ class SettingsScreen(Screen):
             Label(""),
             Checkbox("Keep database", value=self.config.keep_database, id="keep-db"),
             Checkbox("Recheck archives", value=self.config.recheck_archives, id="recheck"),
+            Checkbox("Recheck already scanned files", value=self.config.recheck_targets, id="recheck-targets"),
+            Label("  (Files are always rechecked if metadata or size changed)", classes="text-muted"),
             Checkbox("Auto-select duplicates", value=self.config.auto_select_duplicates, id="auto-select"),
             Checkbox("Dry run mode", value=self.config.dry_run, id="dry-run"),
             Label(""),
@@ -306,6 +310,7 @@ class SettingsScreen(Screen):
         
         self.config.keep_database = self.query_one("#keep-db", Checkbox).value
         self.config.recheck_archives = self.query_one("#recheck", Checkbox).value
+        self.config.recheck_targets = self.query_one("#recheck-targets", Checkbox).value
         self.config.auto_select_duplicates = self.query_one("#auto-select", Checkbox).value
         self.config.dry_run = self.query_one("#dry-run", Checkbox).value
         try:

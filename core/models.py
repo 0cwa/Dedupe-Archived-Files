@@ -87,6 +87,7 @@ class AppConfig:
     db_path: str = "./dup_cache.db"
     keep_database: bool = True
     recheck_archives: bool = False
+    recheck_targets: bool = False
     search_target_archives: bool = False
     dry_run: bool = False
     auto_mode: bool = False
