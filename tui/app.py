@@ -3,7 +3,7 @@ Main Textual application for Archive Duplicate Finder.
 """
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.widgets import Header, Footer, Button, Static, Input, Label, ListView, ListItem, ProgressBar, Checkbox, Select
+from textual.widgets import Header, Footer, Button, Static, Input, Label, ListView, ListItem, ProgressBar, Checkbox, Select, RadioSet, RadioButton
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.worker import Worker
@@ -52,6 +52,9 @@ class ConfigScreen(Screen):
                 Button("- Remove Selected", id="remove-target", variant="error"),
             ),
             Label(""),
+            Label("Current Settings:", classes="setting-label"),
+            Static(id="settings-summary", classes="settings-summary-box"),
+            Label(""),
             Horizontal(
                 Button("⚙️  Settings", id="settings-btn", variant="default"),
                 Button("▶️  Start Scan", id="start-btn", variant="primary"),
@@ -66,8 +69,25 @@ class ConfigScreen(Screen):
         self.app.exit()
     
     async def on_mount(self) -> None:
-        """Update the lists when screen is mounted."""
+        """Update the lists and settings summary when screen is mounted."""
         await self._update_lists()
+        self._update_settings_summary()
+    
+    def _update_settings_summary(self) -> None:
+        """Update the settings summary display."""
+        summary = self.query_one("#settings-summary", Static)
+        
+        method = "🗑️ Trash" if self.config.delete_method == "trash" else "⚠️ Permanent"
+        keep_db = "Yes" if self.config.keep_database else "No"
+        recheck = "Yes" if self.config.recheck_archives else "No"
+        dry_run = " [DRY RUN]" if self.config.dry_run else ""
+        
+        summary.update(
+            f"Delete: [b]{method}[/b]{dry_run} | "
+            f"Keep DB: {keep_db} | "
+            f"Recheck: {recheck} | "
+            f"Min Size: {FileOperations.format_size(self.config.min_file_size)}"
+        )
     
     async def _update_lists(self) -> None:
         """Update the source and target lists from config."""
@@ -142,7 +162,11 @@ class ConfigScreen(Screen):
     
     def action_settings(self) -> None:
         """Open settings screen."""
-        self.app.push_screen(SettingsScreen(self.config))
+        self.app.push_screen(SettingsScreen(self.config), callback=self._on_settings_closed)
+    
+    def _on_settings_closed(self, result: Optional[bool] = None) -> None:
+        """Callback when settings screen closes."""
+        self._update_settings_summary()
     
     def action_start_scan(self) -> None:
         """Start scanning."""
@@ -239,22 +263,15 @@ class SettingsScreen(Screen):
         super().__init__()
         self.config = config
     
-    # Options for delete method select
-    DELETE_OPTIONS = [
-        ("🗑️  Move to Trash (safer)", "trash"),
-        ("⚠️  Permanent Delete (cannot be undone)", "permanent"),
-    ]
-    
     def compose(self) -> ComposeResult:
         yield Container(
             Static("⚙️  Settings", classes="header"),
             Label(""),
             Label("Delete method:", classes="setting-label"),
-            Select(
-                self.DELETE_OPTIONS,
-                value=self.config.delete_method,
-                id="delete-method-select",
-                prompt="Select delete method...",
+            RadioSet(
+                RadioButton("🗑️  Move to Trash (safer)", id="trash", value=self.config.delete_method == "trash"),
+                RadioButton("⚠️  Permanent Delete (cannot be undone)", id="permanent", value=self.config.delete_method == "permanent"),
+                id="delete-method-radios"
             ),
             Label(""),
             Checkbox("Keep database", value=self.config.keep_database, id="keep-db"),
@@ -282,10 +299,10 @@ class SettingsScreen(Screen):
     
     def _save_settings(self) -> None:
         """Save settings and go back."""
-        # Get delete method from Select widget
-        select_widget = self.query_one("#delete-method-select", Select)
-        if select_widget.value is not None and select_widget.value != Select.BLANK:
-            self.config.delete_method = str(select_widget.value)
+        # Get delete method from RadioSet
+        radios = self.query_one("#delete-method-radios", RadioSet)
+        if radios.pressed_button:
+            self.config.delete_method = str(radios.pressed_button.id)
         
         self.config.keep_database = self.query_one("#keep-db", Checkbox).value
         self.config.recheck_archives = self.query_one("#recheck", Checkbox).value
@@ -299,7 +316,7 @@ class SettingsScreen(Screen):
     
     def action_go_back(self) -> None:
         """Go back without saving."""
-        self.app.pop_screen()
+        self.dismiss()
     
     def action_quit(self) -> None:
         """Quit the application."""
