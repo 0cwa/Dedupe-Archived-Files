@@ -466,31 +466,35 @@ class ScanningScreen(Screen):
             except Exception:
                 pass
         finally:
+            # Always close database in the worker thread to avoid threading issues
+            if self.db:
+                try:
+                    self.db.close()
+                except Exception:
+                    pass
+                self.db = None
             self._scan_complete.set()
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel-btn":
             self._cancelled = True
             self._scan_complete.set()
-            if self.db:
-                self.db.close()
+            # Don't close db here - it will be closed in the worker thread's finally block
             self.app.pop_screen()
         elif event.button.id == "continue-btn":
             # Go to review screen
+            # Database connection is already closed, create a new one for review
             if self.duplicates_by_archive:
-                self.app.push_screen(ReviewScreen(self.config, self.db, self.duplicates_by_archive))
+                self.app.push_screen(ReviewScreen(self.config, self.config.db_path, self.duplicates_by_archive))
             else:
                 self.app.push_screen(MessageScreen("No Duplicates", "No duplicate files were found."))
-                if self.db:
-                    self.db.close()
                 self.app.pop_screen()
     
     def action_quit(self) -> None:
         """Quit the application."""
         self._cancelled = True
         self._scan_complete.set()
-        if self.db:
-            self.db.close()
+        # Don't close db here - it will be closed in the worker thread's finally block
         self.app.exit()
 
 
@@ -505,10 +509,11 @@ class ReviewScreen(Screen):
         Binding("q", "quit", "Quit"),
     ]
     
-    def __init__(self, config: AppConfig, db: DatabaseManager, duplicates_by_archive: Dict):
+    def __init__(self, config: AppConfig, db_path: str, duplicates_by_archive: Dict):
         super().__init__()
         self.config = config
-        self.db = db
+        self.db_path = db_path
+        self.db = None
         self.duplicates_by_archive = duplicates_by_archive
         self.current_selections = {}
         
@@ -517,6 +522,22 @@ class ReviewScreen(Screen):
             for match in matches:
                 key = (match.source_file.full_hash or match.source_file.quick_hash, match.target_path)
                 self.current_selections[key] = match.selected_for_deletion
+    
+    def _get_db(self) -> DatabaseManager:
+        """Get or create database connection."""
+        if self.db is None:
+            self.db = DatabaseManager(self.db_path)
+            self.db.connect()
+        return self.db
+    
+    def _close_db(self) -> None:
+        """Close database connection if open."""
+        if self.db:
+            try:
+                self.db.close()
+            except Exception:
+                pass
+            self.db = None
     
     def compose(self) -> ComposeResult:
         # Build duplicate list
@@ -568,7 +589,7 @@ class ReviewScreen(Screen):
                     selected_files.append(match.target_path)
         
         if selected_files:
-            self.app.push_screen(ConfirmationScreen(self.config, self.db, selected_files, self.duplicates_by_archive))
+            self.app.push_screen(ConfirmationScreen(self.config, self.db_path, selected_files, self.duplicates_by_archive))
         else:
             self.app.push_screen(MessageScreen("No Selection", "No files selected for deletion."))
     
@@ -584,12 +605,12 @@ class ReviewScreen(Screen):
     
     def action_go_back(self) -> None:
         """Go back to previous screen."""
-        self.db.close()
+        self._close_db()
         self.app.pop_screen()
     
     def action_quit(self) -> None:
         """Quit the application."""
-        self.db.close()
+        self._close_db()
         self.app.exit()
 
 
@@ -601,12 +622,29 @@ class ConfirmationScreen(Screen):
         Binding("q", "quit", "Quit"),
     ]
     
-    def __init__(self, config: AppConfig, db: DatabaseManager, selected_files: List[str], duplicates_by_archive: Dict):
+    def __init__(self, config: AppConfig, db_path: str, selected_files: List[str], duplicates_by_archive: Dict):
         super().__init__()
         self.config = config
-        self.db = db
+        self.db_path = db_path
+        self.db = None
         self.selected_files = selected_files
         self.duplicates_by_archive = duplicates_by_archive
+    
+    def _get_db(self) -> DatabaseManager:
+        """Get or create database connection."""
+        if self.db is None:
+            self.db = DatabaseManager(self.db_path)
+            self.db.connect()
+        return self.db
+    
+    def _close_db(self) -> None:
+        """Close database connection if open."""
+        if self.db:
+            try:
+                self.db.close()
+            except Exception:
+                pass
+            self.db = None
     
     def compose(self) -> ComposeResult:
         total_size = FileOperations.get_total_size(self.selected_files)
@@ -651,8 +689,8 @@ class ConfirmationScreen(Screen):
         if failures:
             result_msg += f"\n{len(failures)} files failed"
         
+        self._close_db()
         self.app.push_screen(MessageScreen("Complete", result_msg))
-        self.db.close()
     
     def action_go_back(self) -> None:
         """Go back without deleting."""
@@ -660,7 +698,7 @@ class ConfirmationScreen(Screen):
     
     def action_quit(self) -> None:
         """Quit the application."""
-        self.db.close()
+        self._close_db()
         self.app.exit()
 
 
