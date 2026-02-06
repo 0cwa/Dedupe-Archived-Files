@@ -28,7 +28,9 @@ class DatabaseManager:
     def connect(self):
         """Connect to database and create tables if needed."""
         try:
-            self.conn = sqlite3.connect(self.db_path)
+            # check_same_thread=False allows connection to be used across threads
+            # This is safe because we only access from one thread at a time
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self.conn.row_factory = sqlite3.Row  # Access columns by name
             self._create_tables()
             logger.info(f"Connected to database: {self.db_path}")
