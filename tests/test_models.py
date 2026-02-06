@@ -313,7 +313,7 @@ class TestAppConfig:
         assert config.target_dirs == []
         assert config.db_path == "./dup_cache.db"
         assert config.keep_database is True
-        assert config.recheck_archives is True
+        assert config.recheck_archives is False
         assert config.search_target_archives is False
         assert config.dry_run is False
         assert config.auto_mode is False

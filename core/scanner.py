@@ -63,12 +63,22 @@ class SourceScanner:
         
         # Scan each archive
         archive_infos = {}
+        total_archives = len(archives)
         for idx, archive_path in enumerate(archives):
             try:
-                info = self._scan_archive(archive_path, idx, len(archives))
+                info = self._scan_archive(archive_path, idx, total_archives)
                 archive_infos[archive_path] = info
             except Exception as e:
                 logger.error(f"Failed to scan archive {archive_path}: {e}")
+        
+        # Final progress update for source scan phase
+        if self.progress_callback:
+            self.progress_callback(ScanProgress(
+                phase="source_scan",
+                current_archive="Source scan complete",
+                archives_processed=total_archives,
+                total_archives=total_archives
+            ))
         
         return archive_infos
     
@@ -107,7 +117,9 @@ class SourceScanner:
         size = stat.st_size
         
         # Check if we need to rescan
-        if self.config.recheck_archives:
+        # If recheck_archives is False, we allow skipping unchanged archives
+        # If recheck_archives is True, we always rescan
+        if not self.config.recheck_archives:
             existing_info = self.db.get_archive_info(archive_path)
             if existing_info and not existing_info.needs_rescan(mtime, size):
                 logger.info(f"Skipping unchanged archive: {path.name}")
@@ -235,9 +247,10 @@ class TargetScanner:
         
         # Check each file for duplicates
         match_count = 0
+        total_files = len(target_files)
         for idx, filepath in enumerate(target_files):
             try:
-                matches = self._check_file(filepath, idx, len(target_files))
+                matches = self._check_file(filepath, idx, total_files)
                 
                 # Group matches by source archive
                 for match in matches:
@@ -248,18 +261,28 @@ class TargetScanner:
                     match_count += 1
                 
                 # Report progress every 10 files for smoother updates
-                if self.progress_callback and idx % 10 == 0:
+                if self.progress_callback and (idx + 1) % 10 == 0:
                     progress = ScanProgress(
                         phase="target_scan",
                         current_file=filepath,
-                        files_processed=idx,
-                        total_files=len(target_files),
+                        files_processed=idx + 1,
+                        total_files=total_files,
                         archives_processed=match_count
                     )
                     self.progress_callback(progress)
             
             except Exception as e:
                 logger.error(f"Failed to check file {filepath}: {e}")
+        
+        # Final progress update for target scan phase
+        if self.progress_callback:
+            self.progress_callback(ScanProgress(
+                phase="target_scan",
+                current_file="Target scan complete",
+                files_processed=total_files,
+                total_files=total_files,
+                archives_processed=match_count
+            ))
         
         logger.info(f"Found {sum(len(v) for v in duplicates_by_archive.values())} duplicate files")
         

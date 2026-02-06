@@ -108,14 +108,26 @@ ListView > ListItem.--highlight {
     background: $primary;
 }
 
-/* Checkboxes */
-Checkbox {
+/* Checkboxes and RadioButtons */
+Checkbox, RadioButton {
     background: $surface;
     border: none;
+    margin: 0 1;
 }
 
-Checkbox:focus {
+Checkbox:focus, RadioButton:focus {
     background: $boost;
+}
+
+RadioSet {
+    background: $surface;
+    border: tall $primary;
+    height: auto;
+    margin: 0 1;
+}
+
+RadioSet:focus {
+    border: tall $accent;
 }
 
 /* Select widget */
@@ -156,6 +168,15 @@ Select > .select--current {
 Container {
     background: $panel;
     border: tall $primary;
+}
+
+.settings-summary-box {
+    background: $surface;
+    color: $text;
+    border: tall $primary;
+    padding: 0 1;
+    height: 3;
+    content-align: center middle;
 }
 
 #config-container {

@@ -31,7 +31,7 @@ def setup_logging(verbose: bool = False):
 @click.option('--target', '-t', multiple=True, help='Target directories to search for duplicates (can specify multiple)')
 @click.option('--db-path', default='./dup_cache.db', help='Database file path')
 @click.option('--no-keep-db', is_flag=True, help='Don\'t keep database between runs')
-@click.option('--no-recheck', is_flag=True, help='Don\'t recheck archives for changes')
+@click.option('--recheck', is_flag=True, help='Recheck archives for changes even if they haven\'t changed')
 @click.option('--search-archives', is_flag=True, help='Search inside target archives too')
 @click.option('--dry-run', is_flag=True, help='Dry run - show what would be deleted')
 @click.option('--auto', is_flag=True, help='Automated mode - no prompts')
@@ -41,7 +41,7 @@ def setup_logging(verbose: bool = False):
 @click.option('--partial-threshold', default=1048576, type=int, help='Partial hash threshold in bytes')
 @click.option('--workers', default=4, type=int, help='Number of parallel workers')
 @click.option('--verbose', '-v', is_flag=True, help='Verbose logging')
-def main(source, target, db_path, no_keep_db, no_recheck, search_archives, 
+def main(source, target, db_path, no_keep_db, recheck, search_archives, 
          dry_run, auto, delete_method, no_auto_select, min_size, 
          partial_threshold, workers, verbose):
     """
@@ -57,7 +57,7 @@ def main(source, target, db_path, no_keep_db, no_recheck, search_archives,
         target_dirs=list(target),
         db_path=db_path,
         keep_database=not no_keep_db,
-        recheck_archives=not no_recheck,
+        recheck_archives=recheck,
         search_target_archives=search_archives,
         dry_run=dry_run,
         auto_mode=auto,

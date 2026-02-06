@@ -265,7 +265,7 @@ class TestSettingsPersistence:
         
         # Test defaults
         assert config.keep_database is True
-        assert config.recheck_archives is True
+        assert config.recheck_archives is False
         assert config.auto_select_duplicates is True
         assert config.dry_run is False
         

@@ -3,7 +3,7 @@ Main Textual application for Archive Duplicate Finder.
 """
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.widgets import Header, Footer, Button, Static, Input, Label, ListView, ListItem, ProgressBar, Checkbox, Select
+from textual.widgets import Header, Footer, Button, Static, Input, Label, ListView, ListItem, ProgressBar, Checkbox, Select, RadioSet, RadioButton
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.worker import Worker
@@ -52,6 +52,9 @@ class ConfigScreen(Screen):
                 Button("- Remove Selected", id="remove-target", variant="error"),
             ),
             Label(""),
+            Label("Current Settings:", classes="setting-label"),
+            Static(id="settings-summary", classes="settings-summary-box"),
+            Label(""),
             Horizontal(
                 Button("⚙️  Settings", id="settings-btn", variant="default"),
                 Button("▶️  Start Scan", id="start-btn", variant="primary"),
@@ -66,8 +69,25 @@ class ConfigScreen(Screen):
         self.app.exit()
     
     async def on_mount(self) -> None:
-        """Update the lists when screen is mounted."""
+        """Update the lists and settings summary when screen is mounted."""
         await self._update_lists()
+        self._update_settings_summary()
+    
+    def _update_settings_summary(self) -> None:
+        """Update the settings summary display."""
+        summary = self.query_one("#settings-summary", Static)
+        
+        method = "🗑️ Trash" if self.config.delete_method == "trash" else "⚠️ Permanent"
+        keep_db = "Yes" if self.config.keep_database else "No"
+        recheck = "Yes" if self.config.recheck_archives else "No"
+        dry_run = " [DRY RUN]" if self.config.dry_run else ""
+        
+        summary.update(
+            f"Delete: [b]{method}[/b]{dry_run} | "
+            f"Keep DB: {keep_db} | "
+            f"Recheck: {recheck} | "
+            f"Min Size: {FileOperations.format_size(self.config.min_file_size)}"
+        )
     
     async def _update_lists(self) -> None:
         """Update the source and target lists from config."""
@@ -142,7 +162,11 @@ class ConfigScreen(Screen):
     
     def action_settings(self) -> None:
         """Open settings screen."""
-        self.app.push_screen(SettingsScreen(self.config))
+        self.app.push_screen(SettingsScreen(self.config), callback=self._on_settings_closed)
+    
+    def _on_settings_closed(self, result: Optional[bool] = None) -> None:
+        """Callback when settings screen closes."""
+        self._update_settings_summary()
     
     def action_start_scan(self) -> None:
         """Start scanning."""
@@ -239,25 +263,15 @@ class SettingsScreen(Screen):
         super().__init__()
         self.config = config
     
-    # Options for delete method select
-    DELETE_OPTIONS = [
-        ("🗑️  Move to Trash (safer)", "trash"),
-        ("⚠️  Permanent Delete (cannot be undone)", "permanent"),
-    ]
-    
     def compose(self) -> ComposeResult:
-        # Find the current option index
-        current_value = self.config.delete_method
-        
         yield Container(
             Static("⚙️  Settings", classes="header"),
             Label(""),
             Label("Delete method:", classes="setting-label"),
-            Select(
-                self.DELETE_OPTIONS,
-                value=current_value,
-                id="delete-method-select",
-                prompt="Select delete method...",
+            RadioSet(
+                RadioButton("🗑️  Move to Trash (safer)", id="trash", value=self.config.delete_method == "trash"),
+                RadioButton("⚠️  Permanent Delete (cannot be undone)", id="permanent", value=self.config.delete_method == "permanent"),
+                id="delete-method-radios"
             ),
             Label(""),
             Checkbox("Keep database", value=self.config.keep_database, id="keep-db"),
@@ -285,10 +299,10 @@ class SettingsScreen(Screen):
     
     def _save_settings(self) -> None:
         """Save settings and go back."""
-        # Get delete method from Select widget
-        select_widget = self.query_one("#delete-method-select", Select)
-        if select_widget.value is not None:
-            self.config.delete_method = select_widget.value
+        # Get delete method from RadioSet
+        radios = self.query_one("#delete-method-radios", RadioSet)
+        if radios.pressed_button:
+            self.config.delete_method = str(radios.pressed_button.id)
         
         self.config.keep_database = self.query_one("#keep-db", Checkbox).value
         self.config.recheck_archives = self.query_one("#recheck", Checkbox).value
@@ -302,7 +316,7 @@ class SettingsScreen(Screen):
     
     def action_go_back(self) -> None:
         """Go back without saving."""
-        self.app.pop_screen()
+        self.dismiss()
     
     def action_quit(self) -> None:
         """Quit the application."""
@@ -322,6 +336,7 @@ class ScanningScreen(Screen):
         self.db = None
         self.duplicates_by_archive = {}
         self._cancelled = False
+        self._is_ui_complete = False
         self._progress_queue = asyncio.Queue()
         self._scan_complete = asyncio.Event()
     
@@ -358,7 +373,7 @@ class ScanningScreen(Screen):
     
     async def _update_ui(self, progress: ScanProgress) -> None:
         """Update UI with progress information."""
-        if self._cancelled:
+        if self._cancelled or self._is_ui_complete:
             return
         try:
             phase_label = self.query_one("#phase-label", Label)
@@ -378,6 +393,7 @@ class ScanningScreen(Screen):
                     progress_bar.update(progress=pct)
                 else:
                     status_label.update("Finding archives...")
+                    progress_bar.update(progress=0)
                     
             elif progress.phase == "target_scan":
                 phase_label.update("Phase 2: Scanning target directories...")
@@ -390,9 +406,12 @@ class ScanningScreen(Screen):
                     progress_bar.update(progress=pct)
                 else:
                     status_label.update("Finding files...")
+                    progress_bar.update(progress=0)
                     
             elif progress.phase == "complete":
-                phase_label.update("✅ Scan complete!", classes="status-complete")
+                self._is_ui_complete = True
+                phase_label.update("✅ Scan complete!")
+                phase_label.add_class("status-complete")
                 progress_bar.update(progress=100)
                 total_dupes = progress.files_processed
                 status_label.update(
@@ -402,7 +421,7 @@ class ScanningScreen(Screen):
                 # Update button
                 cancel_btn = self.query_one("#cancel-btn", Button)
                 cancel_btn.label = "Continue →"
-                cancel_btn.id = "continue-btn"
+                cancel_btn.variant = "primary"
                 return
             
             # Update current file label
@@ -477,13 +496,21 @@ class ScanningScreen(Screen):
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel-btn":
-            self._cancelled = True
-            self._scan_complete.set()
-            # Don't close db here - it will be closed in the worker thread's finally block
-            self.app.pop_screen()
+            if self._is_ui_complete:
+                # Go to review screen
+                if self.duplicates_by_archive:
+                    self.app.push_screen(ReviewScreen(self.config, self.config.db_path, self.duplicates_by_archive))
+                else:
+                    self.app.push_screen(MessageScreen("No Duplicates", "No duplicate files were found."))
+                    self.app.pop_screen()
+            else:
+                self._cancelled = True
+                self._scan_complete.set()
+                # Don't close db here - it will be closed in the worker thread's finally block
+                self.app.pop_screen()
         elif event.button.id == "continue-btn":
-            # Go to review screen
-            # Database connection is already closed, create a new one for review
+            # This ID might still be sent if we haven't removed it everywhere or if it's used elsewhere
+            # But with our changes, we primarily use cancel-btn with a different label
             if self.duplicates_by_archive:
                 self.app.push_screen(ReviewScreen(self.config, self.config.db_path, self.duplicates_by_archive))
             else:
@@ -516,6 +543,7 @@ class ReviewScreen(Screen):
         self.db = None
         self.duplicates_by_archive = duplicates_by_archive
         self.current_selections = {}
+        self.item_map = {}  # index -> (key, match, label)
         
         # Initialize selections
         for archive, matches in duplicates_by_archive.items():
@@ -542,16 +570,27 @@ class ReviewScreen(Screen):
     def compose(self) -> ComposeResult:
         # Build duplicate list
         items = []
+        self.item_map = {}
+        idx = 0
+        
         for archive_path, matches in self.duplicates_by_archive.items():
             archive_name = Path(archive_path).name
             items.append(ListItem(Label(f"📦 {archive_name} ({len(matches)} duplicates)", classes="archive-name")))
+            idx += 1
             
-            for match in matches[:10]:  # Show first 10
-                checkbox_mark = "[X]" if match.selected_for_deletion else "[ ]"
+            for match in matches:
+                key = (match.source_file.full_hash or match.source_file.quick_hash, match.target_path)
+                selected = self.current_selections.get(key, True)
+                
+                checkbox_mark = "[X]" if selected else "[ ]"
                 size_str = FileOperations.format_size(match.target_size)
-                items.append(ListItem(
-                    Label(f"  {checkbox_mark} {match.source_file.filename} → {match.target_path} ({size_str})")
-                ))
+                
+                label_text = f"  {checkbox_mark} {match.source_file.filename} → {match.target_path} ({size_str})"
+                label = Label(label_text, classes="file-selected" if selected else "file-unselected")
+                
+                items.append(ListItem(label))
+                self.item_map[idx] = (key, match, label)
+                idx += 1
         
         yield Container(
             Static("📋 Review Duplicates", classes="header"),
@@ -562,8 +601,8 @@ class ReviewScreen(Screen):
             ),
             Horizontal(
                 Button("← Back", id="back-btn"),
-                Button("Select All", id="select-all-btn"),
-                Button("Deselect All", id="deselect-all-btn"),
+                Button("Select All (A)", id="select-all-btn"),
+                Button("Deselect All (N)", id="deselect-all-btn"),
                 Button("Continue →", id="continue-btn", variant="primary"),
             ),
             id="review-container"
@@ -593,15 +632,41 @@ class ReviewScreen(Screen):
         else:
             self.app.push_screen(MessageScreen("No Selection", "No files selected for deletion."))
     
+    def action_toggle_selection(self) -> None:
+        """Toggle selection of the current item."""
+        list_view = self.query_one("#dup-list", ListView)
+        idx = list_view.index
+        if idx is not None and idx in self.item_map:
+            key, match, label = self.item_map[idx]
+            new_state = not self.current_selections.get(key, True)
+            self.current_selections[key] = new_state
+            
+            # Update UI
+            self._update_item_ui(key, match, label, new_state)
+
+    def _update_item_ui(self, key, match, label, selected) -> None:
+        """Update a single item's UI state."""
+        checkbox_mark = "[X]" if selected else "[ ]"
+        size_str = FileOperations.format_size(match.target_size)
+        label.update(f"  {checkbox_mark} {match.source_file.filename} → {match.target_path} ({size_str})")
+        if selected:
+            label.add_class("file-selected")
+            label.remove_class("file-unselected")
+        else:
+            label.add_class("file-unselected")
+            label.remove_class("file-selected")
+
     def action_select_all(self) -> None:
-        for key in self.current_selections:
+        """Select all duplicates."""
+        for idx, (key, match, label) in self.item_map.items():
             self.current_selections[key] = True
-        self.refresh()
+            self._update_item_ui(key, match, label, True)
     
     def action_deselect_all(self) -> None:
-        for key in self.current_selections:
+        """Deselect all duplicates."""
+        for idx, (key, match, label) in self.item_map.items():
             self.current_selections[key] = False
-        self.refresh()
+            self._update_item_ui(key, match, label, False)
     
     def action_go_back(self) -> None:
         """Go back to previous screen."""
@@ -612,6 +677,7 @@ class ReviewScreen(Screen):
         """Quit the application."""
         self._close_db()
         self.app.exit()
+
 
 
 class ConfirmationScreen(Screen):
