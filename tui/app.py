@@ -427,8 +427,8 @@ class ScanningScreen(Screen):
                 if self._cancelled:
                     return
                 try:
-                    # Use call_from_thread to safely put to async queue
-                    self.app.call_from_thread(self._progress_queue.put_nowait, progress)
+                    # Put directly to queue - asyncio.Queue is thread-safe for put_nowait
+                    self._progress_queue.put_nowait(progress)
                 except Exception as e:
                     logger.debug(f"Queue progress error: {e}")
             

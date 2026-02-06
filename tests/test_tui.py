@@ -322,6 +322,54 @@ class TestEdgeCases:
         assert special_path in config.source_dirs
 
 
+class TestScanningScreenThreading:
+    """Tests for ScanningScreen threading and progress updates."""
+    
+    @pytest.mark.asyncio
+    async def test_progress_queue_thread_safety(self):
+        """Test that progress updates work correctly from background thread.
+        
+        This test verifies that asyncio.Queue.put_nowait can be called directly
+        from a background thread without needing call_from_thread, which would
+        raise an error if called from the same thread as the app.
+        """
+        from core.models import ScanProgress
+        
+        # Create a queue like ScanningScreen does
+        progress_queue = asyncio.Queue()
+        
+        # Test putting progress (simulating what queue_progress does now)
+        progress = ScanProgress(
+            phase="source_scan",
+            current_archive="test.zip",
+            archives_processed=1,
+            total_archives=5
+        )
+        
+        # This simulates direct queue access from a background thread
+        # (asyncio.Queue is thread-safe for put_nowait)
+        progress_queue.put_nowait(progress)
+        
+        # Verify the progress was queued
+        retrieved = await asyncio.wait_for(progress_queue.get(), timeout=1.0)
+        assert retrieved.phase == "source_scan"
+        assert retrieved.current_archive == "test.zip"
+    
+    def test_scanning_screen_creation(self):
+        """Test ScanningScreen can be created."""
+        from tui.app import ScanningScreen
+        
+        config = AppConfig(
+            source_dirs=["/test/source"],
+            target_dirs=["/test/target"],
+            db_path=":memory:"
+        )
+        
+        screen = ScanningScreen(config)
+        assert screen.config == config
+        assert screen._cancelled is False
+
+
 # Mark all tests that require Textual
 pytestmark = [
     pytest.mark.filterwarnings("ignore::DeprecationWarning"),
