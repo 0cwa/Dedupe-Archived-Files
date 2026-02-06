@@ -86,7 +86,7 @@ class AppConfig:
     target_dirs: List[str] = field(default_factory=list)
     db_path: str = "./dup_cache.db"
     keep_database: bool = True
-    recheck_archives: bool = True
+    recheck_archives: bool = False
     search_target_archives: bool = False
     dry_run: bool = False
     auto_mode: bool = False

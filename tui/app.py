@@ -277,6 +277,10 @@ class SettingsScreen(Screen):
             id="settings-container"
         )
     
+    def on_mount(self) -> None:
+        """Initialize settings."""
+        self.query_one("#delete-method-select", Select).value = self.config.delete_method
+    
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save-btn":
             self._save_settings()
@@ -287,8 +291,8 @@ class SettingsScreen(Screen):
         """Save settings and go back."""
         # Get delete method from Select widget
         select_widget = self.query_one("#delete-method-select", Select)
-        if select_widget.value is not None:
-            self.config.delete_method = select_widget.value
+        if select_widget.value is not None and select_widget.value != Select.BLANK:
+            self.config.delete_method = str(select_widget.value)
         
         self.config.keep_database = self.query_one("#keep-db", Checkbox).value
         self.config.recheck_archives = self.query_one("#recheck", Checkbox).value
@@ -322,6 +326,7 @@ class ScanningScreen(Screen):
         self.db = None
         self.duplicates_by_archive = {}
         self._cancelled = False
+        self._is_ui_complete = False
         self._progress_queue = asyncio.Queue()
         self._scan_complete = asyncio.Event()
     
@@ -358,7 +363,7 @@ class ScanningScreen(Screen):
     
     async def _update_ui(self, progress: ScanProgress) -> None:
         """Update UI with progress information."""
-        if self._cancelled:
+        if self._cancelled or self._is_ui_complete:
             return
         try:
             phase_label = self.query_one("#phase-label", Label)
@@ -378,6 +383,7 @@ class ScanningScreen(Screen):
                     progress_bar.update(progress=pct)
                 else:
                     status_label.update("Finding archives...")
+                    progress_bar.update(progress=0)
                     
             elif progress.phase == "target_scan":
                 phase_label.update("Phase 2: Scanning target directories...")
@@ -390,8 +396,10 @@ class ScanningScreen(Screen):
                     progress_bar.update(progress=pct)
                 else:
                     status_label.update("Finding files...")
+                    progress_bar.update(progress=0)
                     
             elif progress.phase == "complete":
+                self._is_ui_complete = True
                 phase_label.update("✅ Scan complete!", classes="status-complete")
                 progress_bar.update(progress=100)
                 total_dupes = progress.files_processed
@@ -402,7 +410,7 @@ class ScanningScreen(Screen):
                 # Update button
                 cancel_btn = self.query_one("#cancel-btn", Button)
                 cancel_btn.label = "Continue →"
-                cancel_btn.id = "continue-btn"
+                cancel_btn.variant = "primary"
                 return
             
             # Update current file label
@@ -477,13 +485,21 @@ class ScanningScreen(Screen):
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel-btn":
-            self._cancelled = True
-            self._scan_complete.set()
-            # Don't close db here - it will be closed in the worker thread's finally block
-            self.app.pop_screen()
+            if self._is_ui_complete:
+                # Go to review screen
+                if self.duplicates_by_archive:
+                    self.app.push_screen(ReviewScreen(self.config, self.config.db_path, self.duplicates_by_archive))
+                else:
+                    self.app.push_screen(MessageScreen("No Duplicates", "No duplicate files were found."))
+                    self.app.pop_screen()
+            else:
+                self._cancelled = True
+                self._scan_complete.set()
+                # Don't close db here - it will be closed in the worker thread's finally block
+                self.app.pop_screen()
         elif event.button.id == "continue-btn":
-            # Go to review screen
-            # Database connection is already closed, create a new one for review
+            # This ID might still be sent if we haven't removed it everywhere or if it's used elsewhere
+            # But with our changes, we primarily use cancel-btn with a different label
             if self.duplicates_by_archive:
                 self.app.push_screen(ReviewScreen(self.config, self.config.db_path, self.duplicates_by_archive))
             else:
