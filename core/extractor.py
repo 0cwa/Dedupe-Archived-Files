@@ -382,9 +382,75 @@ class ArchiveExtractor:
             # Don't raise here, let other handlers try
     
     def _extract_appimage(self, archive_path: str, recursion_depth: int) -> Generator:
-        """Specialized extractor for AppImage (SquashFS/ISO/ZIP)."""
+        """Specialized extractor for AppImage (using --appimage-extract or carving)."""
+        archive_name = Path(archive_path).name
+        
+        # 1. Try extraction via execution (most reliable on Linux for SquashFS AppImages)
+        if os.name == 'posix':
+            try:
+                # AppImages need to be executable
+                original_mode = os.stat(archive_path).st_mode
+                if not (original_mode & 0o111):
+                    try:
+                        os.chmod(archive_path, original_mode | 0o111)
+                    except Exception:
+                        pass # Might not have permission, try anyway
+                
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    # --appimage-extract extracts to 'squashfs-root' in the CWD
+                    try:
+                        import subprocess
+                        subprocess.run(
+                            [os.path.abspath(archive_path), "--appimage-extract"],
+                            cwd=tmp_dir,
+                            capture_output=True,
+                            timeout=30,
+                            check=False
+                        )
+                        
+                        extract_path = Path(tmp_dir) / "squashfs-root"
+                        if extract_path.exists():
+                            found_any = False
+                            for root, dirs, files in os.walk(extract_path):
+                                for file in files:
+                                    full_path = Path(root) / file
+                                    if not full_path.is_file():
+                                        continue
+                                        
+                                    rel_path = full_path.relative_to(extract_path)
+                                    try:
+                                        with open(full_path, 'rb') as f:
+                                            data = f.read()
+                                            size = len(data)
+                                            is_nested = self.is_archive(str(rel_path))
+                                            
+                                            # Yield the file
+                                            yield (f"{archive_name}/{rel_path}", io.BytesIO(data), size, is_nested)
+                                            found_any = True
+                                            
+                                            # If it's a nested archive, recursively extract it
+                                            if is_nested and recursion_depth < self.max_recursion_depth:
+                                                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file).suffix) as tmp_file:
+                                                    tmp_file.write(data)
+                                                    tmp_file_path = tmp_file.name
+                                                
+                                                try:
+                                                    for n_path, n_stream, n_size, n_is_archive in self._extract_nested(tmp_file_path, f"{archive_name}/{rel_path}", recursion_depth):
+                                                        yield (n_path, n_stream, n_size, n_is_archive)
+                                                finally:
+                                                    Path(tmp_file_path).unlink(missing_ok=True)
+                                    except Exception as e:
+                                        logger.debug(f"Failed to read extracted AppImage file {rel_path}: {e}")
+                            
+                            if found_any:
+                                return # Success with execution approach
+                    except (subprocess.SubprocessError, OSError) as e:
+                        logger.debug(f"AppImage execution failed: {e}")
+            except Exception as e:
+                logger.debug(f"AppImage execution approach failed: {e}")
+
+        # 2. Fall back to carving (Type 2 SquashFS/ISO/ZIP)
         try:
-            archive_name = Path(archive_path).name
             with open(archive_path, 'rb') as f:
                 # AppImage Type 2 has magic 'AI\x02' at offset 8
                 f.seek(8)
@@ -432,7 +498,6 @@ class ArchiveExtractor:
                     
                     try:
                         # Use _extract_nested to properly handle path prefixing and recursion.
-                        # This treats the AppImage as a container for its payload.
                         found_any = False
                         for nested_path, nested_stream, nested_size, nested_is_archive in self._extract_nested(tmp_path, archive_name, recursion_depth):
                             yield (nested_path, nested_stream, nested_size, nested_is_archive)
@@ -444,7 +509,7 @@ class ArchiveExtractor:
                         Path(tmp_path).unlink(missing_ok=True)
 
         except Exception as e:
-            logger.debug(f"AppImage specialized extraction failed: {e}")
+            logger.debug(f"AppImage carving extraction failed: {e}")
 
     def _extract_nested(self, temp_path: str, original_name: str, parent_recursion_depth: int) -> Generator:
         """Helper to extract nested archives with proper path tracking."""
