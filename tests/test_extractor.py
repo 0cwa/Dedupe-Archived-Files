@@ -356,7 +356,8 @@ class TestErrorHandling:
         results = list(extractor.extract_archive(str(appimage_file)))
         
         # In our mock, libarchive should find the ZIP at the offset
-        assert any(r[0] == "app.txt" for r in results)
+        # The path should now be prefixed with the archive name
+        assert any(r[0] == "test.appimage/app.txt" for r in results)
 
 
 class TestExtract7z:

@@ -384,70 +384,62 @@ class ArchiveExtractor:
     def _extract_appimage(self, archive_path: str, recursion_depth: int) -> Generator:
         """Specialized extractor for AppImage (SquashFS/ISO/ZIP)."""
         try:
+            archive_name = Path(archive_path).name
             with open(archive_path, 'rb') as f:
-                # Read first 10MB to find magic
+                # AppImage Type 2 has magic 'AI\x02' at offset 8
+                f.seek(8)
+                magic = f.read(3)
+                is_type2 = (magic == b'AI\x02')
+                
+                f.seek(0)
+                # Read head to find squashfs/iso/zip. 10MB should cover most runtimes.
                 head = f.read(10 * 1024 * 1024)
                 
-                # Try Type 2 (SquashFS)
-                # Look for all occurrences of SquashFS magic
-                sqfs_magics = [b'hsqs', b'sqsh', b'qshs', b'shsq']
-                for magic in sqfs_magics:
-                    curr_pos = 0
-                    while True:
-                        offset = head.find(magic, curr_pos)
-                        if offset == -1:
-                            break
-                        
-                        # Found a potential squashfs offset
-                        with tempfile.NamedTemporaryFile(delete=False, suffix='.squashfs') as tmp:
-                            f.seek(offset)
-                            shutil.copyfileobj(f, tmp)
-                            tmp_path = tmp.name
-                        
-                        try:
-                            # Try to extract from this squashfs
-                            # We use a sub-generator to check if it yields anything
-                            sub_gen = self.extract_archive(tmp_path, recursion_depth + 1)
-                            try:
-                                first = next(sub_gen)
-                                yield first
-                                yield from sub_gen
-                                return # Success!
-                            except StopIteration:
-                                pass # This offset didn't work, try next
-                        finally:
-                            Path(tmp_path).unlink(missing_ok=True)
-                        
-                        curr_pos = offset + 1
+                # Collect potential offsets to try
+                potential_offsets = []
                 
-                # Try Type 1 (ISO 9660)
-                # Check for CD001 magic at 0x8001, 0x8801, or 0x9001
+                # Try SquashFS (Type 2)
+                sqfs_found = False
+                for m in [b'hsqs', b'sqsh']:
+                    # AppImage SquashFS is usually at the end of the runtime (>= 32KB).
+                    # We prioritize offsets after 32KB to avoid false positives in ELF headers,
+                    # but fall back to 0 for non-standard or small AppImages (and tests).
+                    for start_pos in [32 * 1024, 0]:
+                        idx = head.find(m, start_pos)
+                        if idx != -1:
+                            potential_offsets.append((idx, '.squashfs'))
+                            sqfs_found = True
+                            break
+                    if sqfs_found: break
+                
+                # Check for ISO (Type 1)
                 for iso_offset in [0x8001, 0x8801, 0x9001]:
                     if len(head) > iso_offset + 5 and head[iso_offset:iso_offset+5] == b'CD001':
-                        # It's probably an ISO. Some libarchive versions can handle it directly,
-                        # but some might need it extracted from the offset.
-                        # For ISO we try libarchive directly on the whole file first (as fallback handles this),
-                        # but here we can try to extract from offset if needed.
-                        # For now, let fallback handle it.
-                        pass
+                        potential_offsets.append((iso_offset - 0x8000, '.iso'))
+                        break
 
-                # Try ZIP (some AppImages/SFX are ZIPs)
-                zip_magic = b'PK\x03\x04'
-                offset = head.find(zip_magic)
-                if offset != -1:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp:
+                # Check for ZIP (some SFX/AppImages)
+                zip_idx = head.find(b'PK\x03\x04')
+                if zip_idx != -1:
+                    potential_offsets.append((zip_idx, '.zip'))
+
+                # Sort and try offsets to find the one that works
+                for offset, suffix in sorted(potential_offsets):
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                         f.seek(offset)
                         shutil.copyfileobj(f, tmp)
                         tmp_path = tmp.name
+                    
                     try:
-                        sub_gen = self._extract_zip(tmp_path, recursion_depth + 1)
-                        try:
-                            first = next(sub_gen)
-                            yield first
-                            yield from sub_gen
-                            return
-                        except StopIteration:
-                            pass
+                        # Use _extract_nested to properly handle path prefixing and recursion.
+                        # This treats the AppImage as a container for its payload.
+                        found_any = False
+                        for nested_path, nested_stream, nested_size, nested_is_archive in self._extract_nested(tmp_path, archive_name, recursion_depth):
+                            yield (nested_path, nested_stream, nested_size, nested_is_archive)
+                            found_any = True
+                        
+                        if found_any:
+                            return # Success!
                     finally:
                         Path(tmp_path).unlink(missing_ok=True)
 
