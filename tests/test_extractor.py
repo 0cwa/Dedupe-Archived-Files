@@ -8,7 +8,7 @@ import tarfile
 import io
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from core.extractor import ArchiveExtractor
+from core.extractor import ArchiveExtractor, ExtractionError
 
 
 class TestArchiveExtractorInit:
@@ -294,31 +294,31 @@ class TestRecursion:
 
 class TestErrorHandling:
     """Tests for error handling."""
-    
+
     def test_extract_nonexistent(self, tmp_path):
-        """Test extracting non-existent archive."""
+        """Test extracting non-existent archive raises ExtractionError."""
         extractor = ArchiveExtractor()
-        results = list(extractor.extract_archive(str(tmp_path / "missing.zip")))
-        assert len(results) == 0
-    
+        with pytest.raises(ExtractionError):
+            list(extractor.extract_archive(str(tmp_path / "missing.zip")))
+
     def test_extract_invalid_zip(self, tmp_path):
-        """Test extracting invalid ZIP."""
+        """Test extracting invalid ZIP raises ExtractionError."""
         invalid_zip = tmp_path / "invalid.zip"
         invalid_zip.write_text("This is not a zip file")
-        
+
         extractor = ArchiveExtractor()
-        results = list(extractor.extract_archive(str(invalid_zip)))
-        assert len(results) == 0
-    
+        with pytest.raises(ExtractionError):
+            list(extractor.extract_archive(str(invalid_zip)))
+
     def test_extract_corrupted_zip(self, tmp_path):
-        """Test extracting corrupted ZIP."""
+        """Test extracting corrupted ZIP raises ExtractionError."""
         corrupted = tmp_path / "corrupted.zip"
         # Create a file that looks like a ZIP but is truncated
         corrupted.write_bytes(b'PK\x03\x04' + b'\x00' * 10)
-        
+
         extractor = ArchiveExtractor()
-        results = list(extractor.extract_archive(str(corrupted)))
-        assert len(results) == 0
+        with pytest.raises(ExtractionError):
+            list(extractor.extract_archive(str(corrupted)))
 
     def test_extract_exe_sfx_zip(self, tmp_path):
         """Test extraction from an .exe that is actually a ZIP SFX."""
@@ -379,16 +379,15 @@ class TestExtract7z:
         assert results[0][0] == "seven.txt"
     
     def test_extract_7z_no_library(self, tmp_path):
-        """Test 7z extraction without library."""
+        """Test 7z extraction without library raises ExtractionError."""
         # This test runs regardless of py7zr availability
         sz_path = tmp_path / "test.7z"
         sz_path.write_bytes(b"fake 7z content")
-        
+
         extractor = ArchiveExtractor()
-        results = list(extractor.extract_archive(str(sz_path)))
-        
-        # Should handle gracefully (either extract or return empty)
-        assert isinstance(results, list)
+        # Should raise ExtractionError when no handler can extract the archive
+        with pytest.raises(ExtractionError):
+            list(extractor.extract_archive(str(sz_path)))
 
 
 class TestSupportedExtensions:

@@ -9,6 +9,7 @@ from unittest.mock import Mock, MagicMock, patch
 from core.scanner import SourceScanner, TargetScanner
 from core.models import AppConfig, ScanProgress
 from core.database import DatabaseManager
+from core.extractor import ExtractionError
 
 
 class TestSourceScanner:
@@ -195,20 +196,20 @@ class TestSourceScanner:
         assert str(zip_path) in results
     
     def test_scan_corrupt_zip(self, config, db, tmp_path):
-        """Test handling of corrupt ZIP."""
+        """Test handling of corrupt ZIP - should not be marked as checked."""
         source_dir = tmp_path / "sources"
         source_dir.mkdir()
-        
+
         # Create corrupt ZIP
         corrupt_zip = source_dir / "corrupt.zip"
         corrupt_zip.write_bytes(b'PK\x03\x04\x00\x00\x00\x00')
-        
+
         scanner = SourceScanner(config, db)
         results = scanner.scan_source_directories()
-        
-        # Should handle gracefully
-        assert len(results) == 1  # Archive is listed
-        assert results[str(corrupt_zip)].file_count == 0  # But no files extracted
+
+        # Corrupt archive should not be in results and not marked in database
+        assert len(results) == 0  # Archive is NOT listed
+        assert db.get_archive_info(str(corrupt_zip)) is None  # Not in database
 
 
 class TestTargetScanner:
