@@ -190,10 +190,10 @@ class ArchiveExtractor:
                                 Path(tmp_path).unlink(missing_ok=True)
                     
                     except Exception as e:
-                        logger.warning(f"Failed to extract {info.filename} from {archive_path}: {e}")
+                        logger.debug(f"Failed to extract {info.filename} from ZIP {archive_path}: {e}")
         
         except Exception as e:
-            logger.error(f"Failed to open ZIP {archive_path}: {e}")
+            logger.debug(f"Failed to open ZIP {archive_path}: {e}")
     
     def _extract_7z(self, archive_path: str, recursion_depth: int) -> Generator:
         """Extract 7z archive."""
@@ -245,10 +245,10 @@ class ArchiveExtractor:
                                 Path(tmp_path).unlink(missing_ok=True)
                     
                     except Exception as e:
-                        logger.warning(f"Failed to extract {name} from {archive_path}: {e}")
+                        logger.debug(f"Failed to extract {name} from 7z {archive_path}: {e}")
         
         except Exception as e:
-            logger.error(f"Failed to open 7z {archive_path}: {e}")
+            logger.debug(f"Failed to open 7z {archive_path}: {e}")
     
     def _extract_rar(self, archive_path: str, recursion_depth: int) -> Generator:
         """Extract RAR archive."""
@@ -281,10 +281,10 @@ class ArchiveExtractor:
                                 Path(tmp_path).unlink(missing_ok=True)
                     
                     except Exception as e:
-                        logger.warning(f"Failed to extract {info.filename} from {archive_path}: {e}")
+                        logger.debug(f"Failed to extract {info.filename} from RAR {archive_path}: {e}")
         
         except Exception as e:
-            logger.error(f"Failed to open RAR {archive_path}: {e}")
+            logger.debug(f"Failed to open RAR {archive_path}: {e}")
     
     def _extract_tar(self, archive_path: str, recursion_depth: int) -> Generator:
         """Extract TAR archive (including compressed variants)."""
@@ -317,10 +317,10 @@ class ArchiveExtractor:
                                 Path(tmp_path).unlink(missing_ok=True)
                     
                     except Exception as e:
-                        logger.warning(f"Failed to extract {member.name} from {archive_path}: {e}")
+                        logger.debug(f"Failed to extract {member.name} from TAR {archive_path}: {e}")
         
         except Exception as e:
-            logger.error(f"Failed to open TAR {archive_path}: {e}")
+            logger.debug(f"Failed to open TAR {archive_path}: {e}")
     
     def _extract_libarchive(self, archive_path: str, recursion_depth: int) -> Generator:
         """Extract archive using libarchive (fallback for various formats)."""
@@ -353,19 +353,25 @@ class ArchiveExtractor:
                                 Path(tmp_path).unlink(missing_ok=True)
                     
                     except Exception as e:
-                        logger.warning(f"Failed to extract {entry.name} from {archive_path}: {e}")
+                        logger.debug(f"Failed to extract {entry.name} from libarchive {archive_path}: {e}")
         
         except Exception as e:
-            logger.error(f"Failed to open archive with libarchive {archive_path}: {e}")
+            logger.debug(f"Failed to open archive with libarchive {archive_path}: {e}")
     
     def _extract_appimage(self, archive_path: str, recursion_depth: int) -> Generator:
-        """Specialized extractor for AppImage (SquashFS)."""
-        # Try finding SquashFS offset for Type 2 AppImages
+        """Specialized extractor for AppImage (SquashFS/ISO)."""
         try:
             with open(archive_path, 'rb') as f:
-                # Read first 1MB to find SquashFS magic
-                head = f.read(1024 * 1024)
-                offset = head.find(b'hsqs')
+                # Read head to find magic
+                head = f.read(10 * 1024 * 1024) # Increased to 10MB to be safer
+                
+                # Try Type 2 (SquashFS)
+                offset = -1
+                for magic in [b'hsqs', b'sqsh', b'qshs', b'shsq']:
+                    offset = head.find(magic)
+                    if offset != -1:
+                        break
+                
                 if offset != -1:
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.squashfs') as tmp:
                         f.seek(offset)
@@ -373,17 +379,21 @@ class ArchiveExtractor:
                         tmp_path = tmp.name
                     
                     try:
-                        if HAS_LIBARCHIVE:
-                            yield from self._extract_libarchive(tmp_path, recursion_depth)
+                        yield from self.extract_archive(tmp_path, recursion_depth + 1)
                     finally:
                         Path(tmp_path).unlink(missing_ok=True)
-                    return 
-        except Exception as e:
-            logger.debug(f"AppImage offset extraction failed: {e}")
+                    return
 
-        # Fallback to normal libarchive
-        if HAS_LIBARCHIVE:
-            yield from self._extract_libarchive(archive_path, recursion_depth)
+                # Try Type 1 (ISO 9660)
+                # Check for CD001 magic at 0x8001, 0x8801, or 0x9001
+                for iso_offset in [0x8001, 0x8801, 0x9001]:
+                    if head[iso_offset:iso_offset+5] == b'CD001':
+                        # It's probably an ISO
+                        if HAS_LIBARCHIVE:
+                            yield from self._extract_libarchive(archive_path, recursion_depth)
+                        return
+        except Exception as e:
+            logger.debug(f"AppImage specialized extraction failed: {e}")
 
     def _extract_nested(self, temp_path: str, original_name: str, parent_recursion_depth: int) -> Generator:
         """Helper to extract nested archives with proper path tracking."""
