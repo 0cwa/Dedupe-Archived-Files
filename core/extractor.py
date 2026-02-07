@@ -125,6 +125,8 @@ class ArchiveExtractor:
         elif suffix in ('.deb', '.rpm', '.iso', '.img', '.msi', '.cab', '.cpio', '.wim', '.squashfs'):
             if HAS_LIBARCHIVE:
                 handlers.append(self._extract_libarchive)
+            if suffix == '.msi':
+                handlers.append(self._extract_carved)
         
         # Format-specific fallback handlers (SFX, AppImage, etc.)
         if suffix == '.exe':
@@ -133,6 +135,7 @@ class ArchiveExtractor:
             handlers.append(self._extract_zip)
             if HAS_LIBARCHIVE:
                 handlers.append(self._extract_libarchive)
+            handlers.append(self._extract_carved)
         elif suffix in ('.appimage', '.run'):
             handlers.append(self._extract_appimage)
             if HAS_7Z:
@@ -140,6 +143,7 @@ class ArchiveExtractor:
             handlers.append(self._extract_zip)
             if HAS_LIBARCHIVE:
                 handlers.append(self._extract_libarchive)
+            handlers.append(self._extract_carved)
         
         # Always add libarchive as a fallback if not already added
         if HAS_LIBARCHIVE and self._extract_libarchive not in handlers:
@@ -448,8 +452,8 @@ class ArchiveExtractor:
                                             size = len(data)
                                             is_nested = self.is_archive(str(rel_path))
                                             
-                                            # Yield the file
-                                            yield (f"{archive_name}/{rel_path}", io.BytesIO(data), size, is_nested)
+                                            # Yield the file (without archive name prefix as it's added by _extract_nested if needed)
+                                            yield (str(rel_path), io.BytesIO(data), size, is_nested)
                                             found_any = True
                                             
                                             # If it's a nested archive, recursively extract it
@@ -459,7 +463,7 @@ class ArchiveExtractor:
                                                     tmp_file_path = tmp_file.name
                                                 
                                                 try:
-                                                    for n_path, n_stream, n_size, n_is_archive in self._extract_nested(tmp_file_path, f"{archive_name}/{rel_path}", recursion_depth):
+                                                    for n_path, n_stream, n_size, n_is_archive in self._extract_nested(tmp_file_path, str(rel_path), recursion_depth):
                                                         yield (n_path, n_stream, n_size, n_is_archive)
                                                 finally:
                                                     Path(tmp_file_path).unlink(missing_ok=True)
@@ -473,14 +477,13 @@ class ArchiveExtractor:
             except Exception as e:
                 logger.debug(f"AppImage execution approach failed: {e}")
 
-        # 2. Fall back to carving (Type 2 SquashFS/ISO/ZIP)
+        # 2. Fall back to generic carving
+        yield from self._extract_carved(archive_path, recursion_depth)
+
+    def _extract_carved(self, archive_path: str, recursion_depth: int) -> Generator:
+        """Generic carving extractor for files with embedded archives."""
         try:
             with open(archive_path, 'rb') as f:
-                # AppImage Type 2 has magic 'AI\x02' at offset 8
-                f.seek(8)
-                magic = f.read(3)
-                is_type2 = (magic == b'AI\x02')
-                
                 f.seek(0, os.SEEK_END)
                 file_size = f.tell()
                 f.seek(0)
@@ -488,15 +491,25 @@ class ArchiveExtractor:
                 # Collect potential offsets to try
                 potential_offsets = []
                 
-                # Try SquashFS (Type 2)
-                for m in (b'hsqs', b'sqsh'):
-                    sqfs_offset = self._find_magic_offset(f, m, start_offset=32 * 1024)
-                    if sqfs_offset is None:
-                        sqfs_offset = self._find_magic_offset(f, m, start_offset=0)
-                    if sqfs_offset is not None:
-                        potential_offsets.append((sqfs_offset, '.squashfs'))
-                        break
+                # Check for various archive magics
+                magics = [
+                    (b'hsqs', '.squashfs'),
+                    (b'sqsh', '.squashfs'),
+                    (b'PK\x03\x04', '.zip'),
+                    (b'7z\xbc\xaf\x27\x1c', '.7z'),
+                    (b'MSCF', '.cab'),
+                    (b'Rar!\x1a\x07\x01\x00', '.rar'),
+                ]
                 
+                for magic, suffix in magics:
+                    offset = 0
+                    while True:
+                        offset = self._find_magic_offset(f, magic, start_offset=offset)
+                        if offset is None:
+                            break
+                        potential_offsets.append((offset, suffix))
+                        offset += len(magic)
+                        
                 # Check for ISO (Type 1)
                 for iso_offset in [0x8001, 0x8801, 0x9001]:
                     if file_size > iso_offset + 5:
@@ -505,12 +518,8 @@ class ArchiveExtractor:
                             potential_offsets.append((iso_offset - 0x8000, '.iso'))
                             break
 
-                # Check for ZIP (some SFX/AppImages)
-                zip_idx = self._find_magic_offset(f, b'PK\x03\x04')
-                if zip_idx is not None:
-                    potential_offsets.append((zip_idx, '.zip'))
-
-                # Sort and try offsets to find the one that works
+                # Sort and try offsets
+                found_any_at_all = False
                 for offset, suffix in sorted(potential_offsets):
                     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                         f.seek(offset)
@@ -518,83 +527,77 @@ class ArchiveExtractor:
                         tmp_path = tmp.name
                     
                     try:
-                        # Try primary extraction method first
-                        found_any = False
-                        for nested_path, nested_stream, nested_size, nested_is_archive in self._extract_nested(tmp_path, archive_name, recursion_depth):
-                            yield (nested_path, nested_stream, nested_size, nested_is_archive)
-                            found_any = True
+                        found_at_offset = False
+                        # Try primary extraction method via recursion
+                        for rel_path, stream, size, is_arch in self.extract_archive(tmp_path, recursion_depth + 1):
+                            yield (rel_path, stream, size, is_arch)
+                            found_at_offset = True
+                            found_any_at_all = True
                         
-                        if found_any:
-                            return # Success!
-                        
-                        # If primary extraction failed, try to find embedded formats in carved content
-                        # This handles cases where AppImage contains SquashFS magic but actual content is ZIP/other formats
-                        embedded_found = self._try_extract_embedded_formats(tmp_path, archive_name, recursion_depth)
-                        if embedded_found:
-                            return # Success with embedded extraction!
+                        if not found_at_offset:
+                            # If primary extraction failed, try to find embedded formats in carved content
+                            for item in self._try_extract_embedded_formats(tmp_path, recursion_depth):
+                                yield item
+                                found_any_at_all = True
+                                
+                    except Exception as e:
+                        logger.debug(f"Carving extraction failed for offset {offset}: {e}")
                     finally:
                         Path(tmp_path).unlink(missing_ok=True)
-
+                
         except Exception as e:
-            logger.debug(f"AppImage carving extraction failed: {e}")
+            logger.debug(f"Carving extraction failed for {archive_path}: {e}")
 
-    def _try_extract_embedded_formats(self, carved_file_path: str, original_name: str, recursion_depth: int) -> bool:
+    def _try_extract_embedded_formats(self, carved_file_path: str, recursion_depth: int) -> Generator:
         """
         Try to extract embedded archive formats from carved content.
         
-        This handles cases where AppImage carving finds a magic signature (like SquashFS)
+        This handles cases where carving finds a magic signature (like SquashFS)
         but the actual content is a different format (like ZIP) embedded after the magic.
         
         Args:
             carved_file_path: Path to the carved temporary file
-            original_name: Original archive name for path prefixing
-            parent_recursion_depth: Current recursion depth
+            recursion_depth: Current recursion depth
             
-        Returns:
-            True if embedded format was found and extracted, False otherwise
+        Yields:
+            Extracted files
         """
         try:
             with open(carved_file_path, 'rb') as f:
-                carved_data = f.read()
-            
-            # Look for embedded archive formats in the carved content
-            embedded_formats = [
-                (b'PK\x03\x04', '.zip'),  # ZIP
-                (b'\x37\x7a\xbc\xaf\x27\x1c', '.7z'),  # 7z
-                (b'Rar!\x1a\x07\x01\x00', '.rar'),  # RAR
-                (b'ustar', '.tar'),  # TAR
-                (b'CD001', '.iso'),  # ISO
-            ]
-            
-            for magic, extension in embedded_formats:
-                offset = carved_data.find(magic)
-                if offset >= 0:
-                    logger.debug(f"Found embedded {extension[1:]} format at offset {offset} in carved content")
-                    
-                    # Extract from the found offset
-                    embedded_data = carved_data[offset:]
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as embedded_tmp:
-                        embedded_tmp.write(embedded_data)
-                        embedded_tmp_path = embedded_tmp.name
-                    
-                    try:
-                        # Try to extract the embedded content
-                        for nested_path, nested_stream, nested_size, nested_is_archive in self._extract_nested(embedded_tmp_path, original_name, recursion_depth):
-                            yield (nested_path, nested_stream, nested_size, nested_is_archive)
-                        return True
-                    except Exception as e:
-                        logger.debug(f"Failed to extract embedded {extension[1:]} format: {e}")
-                        # Clean up and try next format
-                        Path(embedded_tmp_path).unlink(missing_ok=True)
-                        continue
-                    finally:
-                        Path(embedded_tmp_path).unlink(missing_ok=True)
-            
-            return False
+                embedded_formats = [
+                    (b'PK\x03\x04', '.zip'),  # ZIP
+                    (b'7z\xbc\xaf\x27\x1c', '.7z'),  # 7z
+                    (b'Rar!\x1a\x07\x01\x00', '.rar'),  # RAR
+                    (b'ustar', '.tar'),  # TAR
+                    (b'CD001', '.iso'),  # ISO
+                    (b'MSCF', '.cab'), # CAB
+                ]
+                
+                for magic, extension in embedded_formats:
+                    f.seek(0)
+                    offset = self._find_magic_offset(f, magic)
+                    if offset is not None and offset > 0: # If offset is 0, it's already what we tried
+                        logger.debug(f"Found embedded {extension[1:]} format at offset {offset}")
+                        
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as embedded_tmp:
+                            f.seek(offset)
+                            shutil.copyfileobj(f, embedded_tmp)
+                            embedded_tmp_path = embedded_tmp.name
+                        
+                        try:
+                            found_any = False
+                            for rel_path, stream, size, is_arch in self.extract_archive(embedded_tmp_path, recursion_depth + 1):
+                                yield (rel_path, stream, size, is_arch)
+                                found_any = True
+                            if found_any:
+                                return # Only need one successful embedded format
+                        except Exception as e:
+                            logger.debug(f"Failed to extract embedded {extension[1:]} format: {e}")
+                        finally:
+                            Path(embedded_tmp_path).unlink(missing_ok=True)
             
         except Exception as e:
             logger.debug(f"Error trying to extract embedded formats: {e}")
-            return False
     
     def _extract_nested(self, temp_path: str, original_name: str, parent_recursion_depth: int) -> Generator:
         """Helper to extract nested archives with proper path tracking."""
