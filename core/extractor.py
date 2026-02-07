@@ -518,7 +518,7 @@ class ArchiveExtractor:
                         tmp_path = tmp.name
                     
                     try:
-                        # Use _extract_nested to properly handle path prefixing and recursion.
+                        # Try primary extraction method first
                         found_any = False
                         for nested_path, nested_stream, nested_size, nested_is_archive in self._extract_nested(tmp_path, archive_name, recursion_depth):
                             yield (nested_path, nested_stream, nested_size, nested_is_archive)
@@ -526,12 +526,76 @@ class ArchiveExtractor:
                         
                         if found_any:
                             return # Success!
+                        
+                        # If primary extraction failed, try to find embedded formats in carved content
+                        # This handles cases where AppImage contains SquashFS magic but actual content is ZIP/other formats
+                        embedded_found = self._try_extract_embedded_formats(tmp_path, archive_name, recursion_depth)
+                        if embedded_found:
+                            return # Success with embedded extraction!
                     finally:
                         Path(tmp_path).unlink(missing_ok=True)
 
         except Exception as e:
             logger.debug(f"AppImage carving extraction failed: {e}")
 
+    def _try_extract_embedded_formats(self, carved_file_path: str, original_name: str, recursion_depth: int) -> bool:
+        """
+        Try to extract embedded archive formats from carved content.
+        
+        This handles cases where AppImage carving finds a magic signature (like SquashFS)
+        but the actual content is a different format (like ZIP) embedded after the magic.
+        
+        Args:
+            carved_file_path: Path to the carved temporary file
+            original_name: Original archive name for path prefixing
+            parent_recursion_depth: Current recursion depth
+            
+        Returns:
+            True if embedded format was found and extracted, False otherwise
+        """
+        try:
+            with open(carved_file_path, 'rb') as f:
+                carved_data = f.read()
+            
+            # Look for embedded archive formats in the carved content
+            embedded_formats = [
+                (b'PK\x03\x04', '.zip'),  # ZIP
+                (b'\x37\x7a\xbc\xaf\x27\x1c', '.7z'),  # 7z
+                (b'Rar!\x1a\x07\x01\x00', '.rar'),  # RAR
+                (b'ustar', '.tar'),  # TAR
+                (b'CD001', '.iso'),  # ISO
+            ]
+            
+            for magic, extension in embedded_formats:
+                offset = carved_data.find(magic)
+                if offset >= 0:
+                    logger.debug(f"Found embedded {extension[1:]} format at offset {offset} in carved content")
+                    
+                    # Extract from the found offset
+                    embedded_data = carved_data[offset:]
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as embedded_tmp:
+                        embedded_tmp.write(embedded_data)
+                        embedded_tmp_path = embedded_tmp.name
+                    
+                    try:
+                        # Try to extract the embedded content
+                        for nested_path, nested_stream, nested_size, nested_is_archive in self._extract_nested(embedded_tmp_path, original_name, recursion_depth):
+                            yield (nested_path, nested_stream, nested_size, nested_is_archive)
+                        return True
+                    except Exception as e:
+                        logger.debug(f"Failed to extract embedded {extension[1:]} format: {e}")
+                        # Clean up and try next format
+                        Path(embedded_tmp_path).unlink(missing_ok=True)
+                        continue
+                    finally:
+                        Path(embedded_tmp_path).unlink(missing_ok=True)
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error trying to extract embedded formats: {e}")
+            return False
+    
     def _extract_nested(self, temp_path: str, original_name: str, parent_recursion_depth: int) -> Generator:
         """Helper to extract nested archives with proper path tracking."""
         for nested_rel_path, nested_stream, nested_size, nested_is_archive in self.extract_archive(temp_path, parent_recursion_depth + 1):
