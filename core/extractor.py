@@ -5,8 +5,9 @@ import zipfile
 import tarfile
 import tempfile
 import shutil
+import os
 from pathlib import Path
-from typing import Generator, Tuple, Optional, BinaryIO
+from typing import Generator, Tuple, Optional, BinaryIO, List, Any
 import logging
 import io
 
@@ -99,31 +100,48 @@ class ArchiveExtractor:
         
         path = Path(archive_path)
         suffix = path.suffix.lower()
+        name_lower = path.name.lower()
         
         # Build list of potential handlers to try
         handlers = []
         
         # Extension-based primary handlers
-        if suffix in ('.zip', '.zipx') or path.name.lower().endswith(('.jar', '.war', '.ear')):
+        if suffix in ('.zip', '.zipx') or any(name_lower.endswith(e) for e in ('.jar', '.war', '.ear')):
             handlers.append(self._extract_zip)
+            if HAS_LIBARCHIVE:
+                handlers.append(self._extract_libarchive)
         elif suffix == '.7z' and HAS_7Z:
             handlers.append(self._extract_7z)
+            if HAS_LIBARCHIVE:
+                handlers.append(self._extract_libarchive)
         elif suffix == '.rar' and HAS_RAR:
             handlers.append(self._extract_rar)
-        elif path.name.lower().endswith(('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz', '.tar.zst', '.tzst')):
+            if HAS_LIBARCHIVE:
+                handlers.append(self._extract_libarchive)
+        elif any(name_lower.endswith(e) for e in ('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz', '.tar.zst', '.tzst')):
             handlers.append(self._extract_tar)
+            if HAS_LIBARCHIVE:
+                handlers.append(self._extract_libarchive)
+        elif suffix in ('.deb', '.rpm', '.iso', '.img', '.msi', '.cab', '.cpio', '.wim', '.squashfs'):
+            if HAS_LIBARCHIVE:
+                handlers.append(self._extract_libarchive)
         
-        # Format-specific fallback handlers (SFX, etc.)
+        # Format-specific fallback handlers (SFX, AppImage, etc.)
         if suffix == '.exe':
             if HAS_7Z:
                 handlers.append(self._extract_7z)
             handlers.append(self._extract_zip)
+            if HAS_LIBARCHIVE:
+                handlers.append(self._extract_libarchive)
         elif suffix in ('.appimage', '.run'):
             handlers.append(self._extract_appimage)
             if HAS_7Z:
                 handlers.append(self._extract_7z)
+            handlers.append(self._extract_zip)
+            if HAS_LIBARCHIVE:
+                handlers.append(self._extract_libarchive)
         
-        # Always add libarchive as a fallback for other formats
+        # Always add libarchive as a fallback if not already added
         if HAS_LIBARCHIVE and self._extract_libarchive not in handlers:
             handlers.append(self._extract_libarchive)
             
@@ -167,7 +185,6 @@ class ArchiveExtractor:
                     try:
                         # Read file data
                         data = zf.read(info.filename)
-                        stream = io.BytesIO(data)
                         size = len(data)
                         
                         # Check if this is a nested archive
@@ -194,6 +211,7 @@ class ArchiveExtractor:
         
         except Exception as e:
             logger.debug(f"Failed to open ZIP {archive_path}: {e}")
+            raise
     
     def _extract_7z(self, archive_path: str, recursion_depth: int) -> Generator:
         """Extract 7z archive."""
@@ -209,7 +227,7 @@ class ArchiveExtractor:
                     name = file_info.filename
                     
                     # Skip directories
-                    if name.endswith('/'):
+                    if file_info.is_directory:
                         continue
                     
                     try:
@@ -249,6 +267,7 @@ class ArchiveExtractor:
         
         except Exception as e:
             logger.debug(f"Failed to open 7z {archive_path}: {e}")
+            raise
     
     def _extract_rar(self, archive_path: str, recursion_depth: int) -> Generator:
         """Extract RAR archive."""
@@ -263,7 +282,6 @@ class ArchiveExtractor:
                     
                     try:
                         data = rf.read(info.filename)
-                        stream = io.BytesIO(data)
                         size = len(data)
                         
                         is_nested = self.is_archive(info.filename)
@@ -285,6 +303,7 @@ class ArchiveExtractor:
         
         except Exception as e:
             logger.debug(f"Failed to open RAR {archive_path}: {e}")
+            raise
     
     def _extract_tar(self, archive_path: str, recursion_depth: int) -> Generator:
         """Extract TAR archive (including compressed variants)."""
@@ -321,6 +340,7 @@ class ArchiveExtractor:
         
         except Exception as e:
             logger.debug(f"Failed to open TAR {archive_path}: {e}")
+            raise
     
     def _extract_libarchive(self, archive_path: str, recursion_depth: int) -> Generator:
         """Extract archive using libarchive (fallback for various formats)."""
@@ -330,6 +350,8 @@ class ArchiveExtractor:
         try:
             with libarchive.file_reader(archive_path) as archive:
                 for entry in archive:
+                    # Some entries might not be regular files (symlinks, etc.)
+                    # We only care about files for duplicate detection
                     if not entry.isfile:
                         continue
                     
@@ -357,41 +379,78 @@ class ArchiveExtractor:
         
         except Exception as e:
             logger.debug(f"Failed to open archive with libarchive {archive_path}: {e}")
+            # Don't raise here, let other handlers try
     
     def _extract_appimage(self, archive_path: str, recursion_depth: int) -> Generator:
-        """Specialized extractor for AppImage (SquashFS/ISO)."""
+        """Specialized extractor for AppImage (SquashFS/ISO/ZIP)."""
         try:
             with open(archive_path, 'rb') as f:
-                # Read head to find magic
-                head = f.read(10 * 1024 * 1024) # Increased to 10MB to be safer
+                # Read first 10MB to find magic
+                head = f.read(10 * 1024 * 1024)
                 
                 # Try Type 2 (SquashFS)
-                offset = -1
-                for magic in [b'hsqs', b'sqsh', b'qshs', b'shsq']:
-                    offset = head.find(magic)
-                    if offset != -1:
-                        break
+                # Look for all occurrences of SquashFS magic
+                sqfs_magics = [b'hsqs', b'sqsh', b'qshs', b'shsq']
+                for magic in sqfs_magics:
+                    curr_pos = 0
+                    while True:
+                        offset = head.find(magic, curr_pos)
+                        if offset == -1:
+                            break
+                        
+                        # Found a potential squashfs offset
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='.squashfs') as tmp:
+                            f.seek(offset)
+                            shutil.copyfileobj(f, tmp)
+                            tmp_path = tmp.name
+                        
+                        try:
+                            # Try to extract from this squashfs
+                            # We use a sub-generator to check if it yields anything
+                            sub_gen = self.extract_archive(tmp_path, recursion_depth + 1)
+                            try:
+                                first = next(sub_gen)
+                                yield first
+                                yield from sub_gen
+                                return # Success!
+                            except StopIteration:
+                                pass # This offset didn't work, try next
+                        finally:
+                            Path(tmp_path).unlink(missing_ok=True)
+                        
+                        curr_pos = offset + 1
                 
-                if offset != -1:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.squashfs') as tmp:
-                        f.seek(offset)
-                        shutil.copyfileobj(f, tmp)
-                        tmp_path = tmp.name
-                    
-                    try:
-                        yield from self.extract_archive(tmp_path, recursion_depth + 1)
-                    finally:
-                        Path(tmp_path).unlink(missing_ok=True)
-                    return
-
                 # Try Type 1 (ISO 9660)
                 # Check for CD001 magic at 0x8001, 0x8801, or 0x9001
                 for iso_offset in [0x8001, 0x8801, 0x9001]:
-                    if head[iso_offset:iso_offset+5] == b'CD001':
-                        # It's probably an ISO
-                        if HAS_LIBARCHIVE:
-                            yield from self._extract_libarchive(archive_path, recursion_depth)
-                        return
+                    if len(head) > iso_offset + 5 and head[iso_offset:iso_offset+5] == b'CD001':
+                        # It's probably an ISO. Some libarchive versions can handle it directly,
+                        # but some might need it extracted from the offset.
+                        # For ISO we try libarchive directly on the whole file first (as fallback handles this),
+                        # but here we can try to extract from offset if needed.
+                        # For now, let fallback handle it.
+                        pass
+
+                # Try ZIP (some AppImages/SFX are ZIPs)
+                zip_magic = b'PK\x03\x04'
+                offset = head.find(zip_magic)
+                if offset != -1:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp:
+                        f.seek(offset)
+                        shutil.copyfileobj(f, tmp)
+                        tmp_path = tmp.name
+                    try:
+                        sub_gen = self._extract_zip(tmp_path, recursion_depth + 1)
+                        try:
+                            first = next(sub_gen)
+                            yield first
+                            yield from sub_gen
+                            return
+                        except StopIteration:
+                            pass
+                    finally:
+                        Path(tmp_path).unlink(missing_ok=True)
+
         except Exception as e:
             logger.debug(f"AppImage specialized extraction failed: {e}")
 
