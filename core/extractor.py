@@ -381,6 +381,30 @@ class ArchiveExtractor:
             logger.debug(f"Failed to open archive with libarchive {archive_path}: {e}")
             # Don't raise here, let other handlers try
     
+    def _find_magic_offset(self, file_obj: BinaryIO, magic: bytes, start_offset: int = 0,
+                           chunk_size: int = 1024 * 1024) -> Optional[int]:
+        """Find the first occurrence of magic bytes in a file-like object."""
+        file_obj.seek(start_offset)
+        overlap = len(magic) - 1
+        buffer = b""
+        offset = start_offset
+
+        while True:
+            chunk = file_obj.read(chunk_size)
+            if not chunk:
+                return None
+
+            data = buffer + chunk
+            idx = data.find(magic)
+            if idx != -1:
+                return offset - len(buffer) + idx
+
+            if len(chunk) < chunk_size:
+                return None
+
+            buffer = data[-overlap:]
+            offset += len(chunk)
+
     def _extract_appimage(self, archive_path: str, recursion_depth: int) -> Generator:
         """Specialized extractor for AppImage (using --appimage-extract or carving)."""
         archive_name = Path(archive_path).name
@@ -457,36 +481,33 @@ class ArchiveExtractor:
                 magic = f.read(3)
                 is_type2 = (magic == b'AI\x02')
                 
+                f.seek(0, os.SEEK_END)
+                file_size = f.tell()
                 f.seek(0)
-                # Read head to find squashfs/iso/zip. 10MB should cover most runtimes.
-                head = f.read(10 * 1024 * 1024)
                 
                 # Collect potential offsets to try
                 potential_offsets = []
                 
                 # Try SquashFS (Type 2)
-                sqfs_found = False
-                for m in [b'hsqs', b'sqsh']:
-                    # AppImage SquashFS is usually at the end of the runtime (>= 32KB).
-                    # We prioritize offsets after 32KB to avoid false positives in ELF headers,
-                    # but fall back to 0 for non-standard or small AppImages (and tests).
-                    for start_pos in [32 * 1024, 0]:
-                        idx = head.find(m, start_pos)
-                        if idx != -1:
-                            potential_offsets.append((idx, '.squashfs'))
-                            sqfs_found = True
-                            break
-                    if sqfs_found: break
+                for m in (b'hsqs', b'sqsh'):
+                    sqfs_offset = self._find_magic_offset(f, m, start_offset=32 * 1024)
+                    if sqfs_offset is None:
+                        sqfs_offset = self._find_magic_offset(f, m, start_offset=0)
+                    if sqfs_offset is not None:
+                        potential_offsets.append((sqfs_offset, '.squashfs'))
+                        break
                 
                 # Check for ISO (Type 1)
                 for iso_offset in [0x8001, 0x8801, 0x9001]:
-                    if len(head) > iso_offset + 5 and head[iso_offset:iso_offset+5] == b'CD001':
-                        potential_offsets.append((iso_offset - 0x8000, '.iso'))
-                        break
+                    if file_size > iso_offset + 5:
+                        f.seek(iso_offset)
+                        if f.read(5) == b'CD001':
+                            potential_offsets.append((iso_offset - 0x8000, '.iso'))
+                            break
 
                 # Check for ZIP (some SFX/AppImages)
-                zip_idx = head.find(b'PK\x03\x04')
-                if zip_idx != -1:
+                zip_idx = self._find_magic_offset(f, b'PK\x03\x04')
+                if zip_idx is not None:
                     potential_offsets.append((zip_idx, '.zip'))
 
                 # Sort and try offsets to find the one that works
