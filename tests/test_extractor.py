@@ -68,7 +68,19 @@ class TestIsArchive:
     def test_is_archive_iso(self):
         """Test ISO detection."""
         assert ArchiveExtractor.is_archive("disk.iso") is True
-    
+        assert ArchiveExtractor.is_archive("image.img") is True
+
+    def test_is_archive_packages(self):
+        """Test package format detection."""
+        assert ArchiveExtractor.is_archive("package.rpm") is True
+        assert ArchiveExtractor.is_archive("package.deb") is True
+        assert ArchiveExtractor.is_archive("installer.msi") is True
+
+    def test_is_archive_executables(self):
+        """Test executable archive detection."""
+        assert ArchiveExtractor.is_archive("program.exe") is True
+        assert ArchiveExtractor.is_archive("app.appimage") is True
+
     def test_is_archive_java(self):
         """Test Java archive detection."""
         assert ArchiveExtractor.is_archive("app.jar") is True
@@ -308,6 +320,45 @@ class TestErrorHandling:
         results = list(extractor.extract_archive(str(corrupted)))
         assert len(results) == 0
 
+    def test_extract_exe_sfx_zip(self, tmp_path):
+        """Test extraction from an .exe that is actually a ZIP SFX."""
+        exe_file = tmp_path / "installer.exe"
+        
+        # Create a ZIP file and save it as .exe
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            zf.writestr("test.txt", "hello")
+        exe_file.write_bytes(buf.getvalue())
+        
+        extractor = ArchiveExtractor()
+        results = list(extractor.extract_archive(str(exe_file)))
+        
+        assert len(results) == 1
+        assert results[0][0] == "test.txt"
+        assert results[0][1].read().decode() == "hello"
+
+    def test_extract_appimage_mock(self, tmp_path):
+        """Test extraction logic for AppImage offset detection."""
+        appimage_file = tmp_path / "test.appimage"
+        
+        # Create a ZIP file as payload
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            zf.writestr("app.txt", "app content")
+        payload = buf.getvalue()
+        
+        # ELF + Magic + Payload
+        appimage_file.write_bytes(b"ELF" + b"\x00" * 50 + b"hsqs" + payload)
+        
+        extractor = ArchiveExtractor()
+        # Mock HAS_LIBARCHIVE to ensure we test the logic even if libarchive is missing
+        # but here it is present.
+        results = list(extractor.extract_archive(str(appimage_file)))
+        
+        # In our mock, libarchive should find the ZIP at the offset
+        # The path should now be prefixed with the archive name
+        assert any(r[0] == "test.appimage/app.txt" for r in results)
+
 
 class TestExtract7z:
     """Tests for 7z extraction (requires py7zr)."""
@@ -355,6 +406,10 @@ class TestSupportedExtensions:
         assert '.tar.bz2' in extensions
         assert '.tar.xz' in extensions
         assert '.iso' in extensions
+        assert '.rpm' in extensions
+        assert '.deb' in extensions
+        assert '.exe' in extensions
+        assert '.appimage' in extensions
     
     def test_java_archives_supported(self):
         """Test Java archive formats."""
