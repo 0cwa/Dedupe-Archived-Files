@@ -36,9 +36,14 @@ except ImportError:
     logger.warning("libarchive not available - extended format support disabled")
 
 
+class ExtractionError(Exception):
+    """Raised when archive extraction fails."""
+    pass
+
+
 class ArchiveExtractor:
     """Handles extraction of various archive formats with recursive support."""
-    
+
     # Archive extensions we can handle
     ARCHIVE_EXTENSIONS = {
         # Common archives
@@ -147,7 +152,7 @@ class ArchiveExtractor:
             
         success = False
         last_exception = None
-        
+
         for handler in handlers:
             try:
                 # Try to get at least one item from the generator
@@ -159,20 +164,24 @@ class ArchiveExtractor:
                     success = True
                     break # Success with this handler
                 except StopIteration:
-                    # No items yielded by this handler
+                    # No items yielded by this handler - might be empty or unsupported
+                    # Continue to try other handlers
                     continue
             except Exception as e:
                 logger.debug(f"Handler {handler.__name__} failed for {archive_path}: {e}")
                 last_exception = e
                 continue
-        
+
         if not success:
+            # Only raise error if there was an actual exception (archive failed to open)
+            # If all handlers returned empty (no exception), archive is empty/unsupported but not an error
             if last_exception:
                 logger.error(f"Failed to extract {archive_path}: {last_exception}")
+                raise ExtractionError(f"Failed to extract {archive_path}: {last_exception}") from last_exception
             elif not handlers:
                 logger.error(f"No handler available for {archive_path}")
-            else:
-                logger.warning(f"Recognized archive but could not extract any files from {archive_path}")
+                raise ExtractionError(f"No handler available for {archive_path}")
+            # If no exception and handlers exist, archive was valid but empty - not an error
     
     def _extract_zip(self, archive_path: str, recursion_depth: int) -> Generator:
         """Extract ZIP archive."""

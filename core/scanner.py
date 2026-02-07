@@ -11,7 +11,7 @@ from queue import Empty
 from .models import FileEntry, DuplicateMatch, ArchiveInfo, ScanProgress, AppConfig
 from .database import DatabaseManager
 from .hasher import HashCalculator
-from .extractor import ArchiveExtractor
+from .extractor import ArchiveExtractor, ExtractionError
 
 logger = logging.getLogger(__name__)
 
