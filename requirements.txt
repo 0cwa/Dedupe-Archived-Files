@@ -10,6 +10,10 @@ xxhash>=3.4.0
 py7zr>=0.20.0        # 7z files
 rarfile>=4.1         # RAR files
 libarchive-c>=5.0    # Universal archive support (tar, iso, etc.)
+python-msi>=0.0.0b3  # MSI files
+olefile>=0.47        # OLE/MSI streams
+pefile>=2024.8.26    # EXE resources
+pyinstaller-extractor>=1.0.3 # PyInstaller EXE extraction
 
 # File operations
 send2trash>=1.8.2    # Safe trash operations

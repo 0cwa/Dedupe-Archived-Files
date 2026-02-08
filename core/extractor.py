@@ -41,6 +41,20 @@ except ImportError:
     HAS_LIBARCHIVE = False
     logger.warning("libarchive not available - extended format support disabled")
 
+try:
+    import pymsi
+    HAS_MSI = True
+except ImportError:
+    HAS_MSI = False
+    logger.warning("python-msi not available - MSI support limited")
+
+try:
+    import pefile
+    HAS_PEFILE = True
+except ImportError:
+    HAS_PEFILE = False
+    logger.warning("pefile not available - EXE resource extraction disabled")
+
 
 class ArchiveExtractor:
     """Handles extraction of various archive formats with recursive support."""
@@ -111,12 +125,16 @@ class ArchiveExtractor:
             # TAR (ustar)
             if b'ustar' in magic[257:262]:
                 handlers.append(self._extract_tar)
-            # CAB or MSI/OLE
-            if magic.startswith(b'MSCF') or magic.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'):
+            # MSI/OLE
+            if magic.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'):
+                if HAS_MSI:
+                    handlers.append(self._extract_msi)
                 if HAS_LIBARCHIVE:
                     handlers.append(self._extract_libarchive)
             # EXE
             if magic.startswith(b'MZ'):
+                if HAS_PEFILE:
+                    handlers.append(self._extract_exe)
                 if HAS_7Z:
                     handlers.append(self._extract_7z)
                 handlers.append(self._extract_zip)
@@ -161,11 +179,15 @@ class ArchiveExtractor:
         elif any(name_lower.endswith(e) for e in ('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz', '.tar.zst', '.tzst')):
             ext_handlers.append(self._extract_tar)
         elif suffix == '.msi':
+            if HAS_MSI:
+                ext_handlers.append(self._extract_msi)
             if HAS_LIBARCHIVE:
                 ext_handlers.append(self._extract_libarchive)
         elif suffix in ('.appimage', '.run'):
             ext_handlers.append(self._extract_appimage)
         elif suffix == '.exe':
+            if HAS_PEFILE:
+                ext_handlers.append(self._extract_exe)
             if HAS_7Z:
                 ext_handlers.append(self._extract_7z)
             ext_handlers.append(self._extract_zip)
@@ -593,6 +615,7 @@ class ArchiveExtractor:
 
                 # Sort and try offsets
                 found_any_at_all = False
+                archive_name = Path(archive_path).name
                 for offset, suffix in sorted(potential_offsets):
                     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                         f.seek(offset)
@@ -602,13 +625,14 @@ class ArchiveExtractor:
                     try:
                         found_at_offset = False
                         # Try primary extraction method via recursion
-                        for rel_path, stream, size, is_arch in self.extract_archive(tmp_path, recursion_depth + 1):
+                        for rel_path, stream, size, is_arch in self._extract_nested(tmp_path, archive_name, recursion_depth):
                             yield (rel_path, stream, size, is_arch)
                             found_at_offset = True
                             found_any_at_all = True
                         
                         if not found_at_offset:
                             # If primary extraction failed, try to find embedded formats in carved content
+                            # We don't prefix here because _try_extract_embedded_formats already calls extract_archive recursively
                             for item in self._try_extract_embedded_formats(tmp_path, recursion_depth):
                                 yield item
                                 found_any_at_all = True
@@ -673,6 +697,144 @@ class ArchiveExtractor:
         except Exception as e:
             logger.debug(f"Error trying to extract embedded formats: {e}")
     
+    def _extract_msi(self, archive_path: str, recursion_depth: int) -> Generator:
+        """Extract MSI archive using pymsi and olefile."""
+        if not HAS_MSI:
+            return
+
+        try:
+            import olefile
+            if olefile.isOleFile(archive_path):
+                with olefile.OleFileIO(archive_path) as ole:
+                    for stream_path in ole.listdir():
+                        stream_name = "/".join(stream_path)
+                        try:
+                            with ole.openstream(stream_path) as s:
+                                data = s.read()
+                                size = len(data)
+                                is_nested = self.is_archive(stream_name)
+                                yield (stream_name, io.BytesIO(data), size, is_nested)
+                                
+                                if is_nested and recursion_depth < self.max_recursion_depth:
+                                    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(stream_name).suffix) as tmp:
+                                        tmp.write(data)
+                                        tmp_path = tmp.name
+                                    
+                                    try:
+                                        for n_path, n_stream, n_size, n_is_archive in self._extract_nested(tmp_path, stream_name, recursion_depth):
+                                            yield (n_path, n_stream, n_size, n_is_archive)
+                                    finally:
+                                        Path(tmp_path).unlink(missing_ok=True)
+                        except Exception as e:
+                            logger.debug(f"Failed to extract stream {stream_name} from MSI: {e}")
+            
+            # pymsi can also be used to explore tables, but streams are usually where the data is
+        except Exception as e:
+            logger.debug(f"Failed to open MSI {archive_path}: {e}")
+            raise
+
+    def _extract_exe(self, archive_path: str, recursion_depth: int) -> Generator:
+        """Extract resources from EXE using pefile and try PyInstaller extraction."""
+        found_any = False
+
+        # 1. Try pefile for resources
+        if HAS_PEFILE:
+            try:
+                pe = pefile.PE(archive_path, fast_load=True)
+                if hasattr(pe, 'DIRECTORY_ENTRY_RESOURCE'):
+                    for type_entry in pe.DIRECTORY_ENTRY_RESOURCE.entries:
+                        if hasattr(type_entry, 'directory'):
+                            for name_entry in type_entry.directory.entries:
+                                if hasattr(name_entry, 'directory'):
+                                    for language_entry in name_entry.directory.entries:
+                                        try:
+                                            data_rva = language_entry.data.struct.OffsetToData
+                                            size = language_entry.data.struct.Size
+                                            data = pe.get_data(data_rva, size)
+                                            
+                                            # Construct a name for the resource
+                                            res_type = pefile.RESOURCE_TYPE.get(type_entry.id, type_entry.name or f"type_{type_entry.id}")
+                                            res_name = name_entry.name or name_entry.id
+                                            filename = f"resources/{res_type}/{res_name}"
+                                            
+                                            is_nested = self.is_archive(filename)
+                                            yield (filename, io.BytesIO(data), size, is_nested)
+                                            found_any = True
+                                            
+                                            if is_nested and recursion_depth < self.max_recursion_depth:
+                                                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename).suffix) as tmp:
+                                                    tmp.write(data)
+                                                    tmp_path = tmp.name
+                                                try:
+                                                    for n_path, n_stream, n_size, n_is_archive in self._extract_nested(tmp_path, filename, recursion_depth):
+                                                        yield (n_path, n_stream, n_size, n_is_archive)
+                                                finally:
+                                                    Path(tmp_path).unlink(missing_ok=True)
+                                        except Exception as res_e:
+                                            logger.debug(f"Failed to extract resource from {archive_path}: {res_e}")
+                pe.close()
+            except Exception as e:
+                logger.debug(f"pefile extraction failed for {archive_path}: {e}")
+
+        # 2. Try PyInstaller extraction if it looks like one
+        try:
+            with open(archive_path, 'rb') as f:
+                content = f.read()
+                if b'PyInstaller' in content or b'python' in content.lower():
+                    # Use pyinstaller_extractor via subprocess for safety
+                    import subprocess
+                    with tempfile.TemporaryDirectory() as tmp_dir:
+                        try:
+                            # Use the CLI tool we found in venv/bin
+                            subprocess.run(
+                                ["pyinstaller_extractor", os.path.abspath(archive_path)],
+                                cwd=tmp_dir,
+                                capture_output=True,
+                                timeout=60,
+                                check=False
+                            )
+                            
+                            # The extractor creates a directory named [filename]_extracted
+                            extracted_dir = Path(tmp_dir) / f"{Path(archive_path).name}_extracted"
+                            if not extracted_dir.exists():
+                                # Try to find any directory created
+                                dirs = [d for d in Path(tmp_dir).iterdir() if d.is_dir()]
+                                if dirs:
+                                    extracted_dir = dirs[0]
+
+                            if extracted_dir.exists():
+                                for root, _, files in os.walk(extracted_dir):
+                                    for file in files:
+                                        full_path = Path(root) / file
+                                        rel_path = full_path.relative_to(extracted_dir)
+                                        try:
+                                            size = full_path.stat().st_size
+                                            is_nested = self.is_archive(file)
+                                            with open(full_path, 'rb') as ef:
+                                                data = ef.read()
+                                                yield (str(rel_path), io.BytesIO(data), size, is_nested)
+                                                found_any = True
+                                                
+                                                if is_nested and recursion_depth < self.max_recursion_depth:
+                                                    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file).suffix) as tmp:
+                                                        tmp.write(data)
+                                                        tmp_path = tmp.name
+                                                    try:
+                                                        for n_path, n_stream, n_size, n_is_archive in self._extract_nested(tmp_path, str(rel_path), recursion_depth):
+                                                            yield (n_path, n_stream, n_size, n_is_archive)
+                                                    finally:
+                                                        Path(tmp_path).unlink(missing_ok=True)
+                                        except Exception as ef_e:
+                                            logger.debug(f"Failed to read extracted PyInstaller file {rel_path}: {ef_e}")
+                        except Exception as pyi_e:
+                            logger.debug(f"PyInstaller extraction failed: {pyi_e}")
+        except Exception as e:
+            logger.debug(f"EXE content check failed: {e}")
+
+        if not found_any:
+            # Fallback to carving or other methods if no resources found
+            pass
+
     def _extract_nested(self, temp_path: str, original_name: str, parent_recursion_depth: int) -> Generator:
         """Helper to extract nested archives with proper path tracking."""
         for nested_rel_path, nested_stream, nested_size, nested_is_archive in self.extract_archive(temp_path, parent_recursion_depth + 1):
