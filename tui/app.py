@@ -3,7 +3,7 @@ Main Textual application for Archive Duplicate Finder.
 """
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.widgets import Header, Footer, Button, Static, Input, Label, ListView, ListItem, ProgressBar, Checkbox, Select, RadioSet, RadioButton
+from textual.widgets import Header, Footer, Button, Static, Input, Label, ListView, ListItem, ProgressBar, Checkbox, Select, RadioSet, RadioButton, DataTable
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.worker import Worker
@@ -532,7 +532,7 @@ class ScanningScreen(Screen):
 
 class ReviewScreen(Screen):
     """Screen for reviewing duplicates."""
-    
+
     BINDINGS = [
         Binding("space", "toggle_selection", "Toggle Selection"),
         Binding("a", "select_all", "Select All"),
@@ -540,7 +540,7 @@ class ReviewScreen(Screen):
         Binding("escape", "go_back", "Back"),
         Binding("q", "quit", "Quit"),
     ]
-    
+
     def __init__(self, config: AppConfig, db_path: str, duplicates_by_archive: Dict):
         super().__init__()
         self.config = config
@@ -548,21 +548,22 @@ class ReviewScreen(Screen):
         self.db = None
         self.duplicates_by_archive = duplicates_by_archive
         self.current_selections = {}
-        self.item_map = {}  # index -> (key, match, label)
-        
+        self.row_map = {}  # row_index -> (key, match)
+        self._data_loaded = False
+
         # Initialize selections
         for archive, matches in duplicates_by_archive.items():
             for match in matches:
                 key = (match.source_file.full_hash or match.source_file.quick_hash, match.target_path)
                 self.current_selections[key] = match.selected_for_deletion
-    
+
     def _get_db(self) -> DatabaseManager:
         """Get or create database connection."""
         if self.db is None:
             self.db = DatabaseManager(self.db_path)
             self.db.connect()
         return self.db
-    
+
     def _close_db(self) -> None:
         """Close database connection if open."""
         if self.db:
@@ -571,39 +572,12 @@ class ReviewScreen(Screen):
             except Exception:
                 pass
             self.db = None
-    
+
     def compose(self) -> ComposeResult:
-        # Build duplicate list
-        items = []
-        self.item_map = {}
-        idx = 0
-        
-        for archive_path, matches in self.duplicates_by_archive.items():
-            archive_name = Path(archive_path).name
-            items.append(ListItem(Label(f"📦 {archive_name} ({len(matches)} duplicates)", classes="archive-name")))
-            idx += 1
-            
-            for match in matches:
-                key = (match.source_file.full_hash or match.source_file.quick_hash, match.target_path)
-                selected = self.current_selections.get(key, True)
-                
-                checkbox_mark = "[X]" if selected else "[ ]"
-                size_str = FileOperations.format_size(match.target_size)
-                
-                label_text = f"  {checkbox_mark} {match.source_file.filename} → {match.target_path} ({size_str})"
-                label = Label(label_text, classes="file-selected" if selected else "file-unselected")
-                
-                items.append(ListItem(label))
-                self.item_map[idx] = (key, match, label)
-                idx += 1
-        
         yield Container(
             Static("📋 Review Duplicates", classes="header"),
             Label("Use Space to toggle selection, Arrow keys to navigate, Esc to go back"),
-            ScrollableContainer(
-                ListView(*items, id="dup-list"),
-                id="review-scroll"
-            ),
+            DataTable(id="dup-table"),
             Horizontal(
                 Button("← Back", id="back-btn"),
                 Button("Select All (A)", id="select-all-btn"),
@@ -612,7 +586,62 @@ class ReviewScreen(Screen):
             ),
             id="review-container"
         )
-    
+
+    async def on_mount(self) -> None:
+        """Load data into the table when screen is mounted."""
+        await self._load_data()
+
+    async def _load_data(self) -> None:
+        """Load duplicate data into the DataTable."""
+        if self._data_loaded:
+            return
+
+        table = self.query_one("#dup-table", DataTable)
+
+        # Configure table
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+        table.add_column("Select", width=8)
+        table.add_column("Source File", width=30)
+        table.add_column("Target Path", width=50)
+        table.add_column("Size", width=12)
+
+        # Flatten data for table
+        row_index = 0
+        for archive_path, matches in self.duplicates_by_archive.items():
+            archive_name = Path(archive_path).name
+
+            # Add archive header row
+            table.add_row(
+                "",
+                f"📦 {archive_name}",
+                f"({len(matches)} duplicates)",
+                "",
+                key=f"archive-{row_index}"
+            )
+            # Mark header row (we'll use the row_map to identify it)
+            row_index += 1
+
+            # Add duplicate rows
+            for match in matches:
+                key = (match.source_file.full_hash or match.source_file.quick_hash, match.target_path)
+                selected = self.current_selections.get(key, True)
+                checkbox = "[X]" if selected else "[ ]"
+                size_str = FileOperations.format_size(match.target_size)
+
+                table.add_row(
+                    checkbox,
+                    match.source_file.filename,
+                    match.target_path,
+                    size_str,
+                    key=f"row-{row_index}"
+                )
+
+                self.row_map[row_index] = (key, match)
+                row_index += 1
+
+        self._data_loaded = True
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back-btn":
             self.action_go_back()
@@ -622,7 +651,7 @@ class ReviewScreen(Screen):
             self.action_deselect_all()
         elif event.button.id == "continue-btn":
             self._continue_to_confirmation()
-    
+
     def _continue_to_confirmation(self) -> None:
         """Move to confirmation screen."""
         selected_files = []
@@ -631,53 +660,68 @@ class ReviewScreen(Screen):
                 key = (match.source_file.full_hash or match.source_file.quick_hash, match.target_path)
                 if self.current_selections.get(key, True):
                     selected_files.append(match.target_path)
-        
+
         if selected_files:
             self.app.push_screen(ConfirmationScreen(self.config, self.db_path, selected_files, self.duplicates_by_archive))
         else:
             self.app.push_screen(MessageScreen("No Selection", "No files selected for deletion."))
-    
+
     def action_toggle_selection(self) -> None:
-        """Toggle selection of the current item."""
-        list_view = self.query_one("#dup-list", ListView)
-        idx = list_view.index
-        if idx is not None and idx in self.item_map:
-            key, match, label = self.item_map[idx]
+        """Toggle selection of the current row."""
+        table = self.query_one("#dup-table", DataTable)
+        cursor_row = table.cursor_row
+
+        # Check if this is a data row (not an archive header)
+        row_key = table.get_row_at(cursor_row).key
+        if not row_key or not row_key.startswith("row-"):
+            return  # Archive header row, skip
+
+        # Extract row index from key
+        try:
+            row_idx = int(row_key.split("-")[1])
+        except (ValueError, IndexError):
+            return
+
+        if row_idx in self.row_map:
+            key, match = self.row_map[row_idx]
             new_state = not self.current_selections.get(key, True)
             self.current_selections[key] = new_state
-            
+
             # Update UI
-            self._update_item_ui(key, match, label, new_state)
+            checkbox = "[X]" if new_state else "[ ]"
+            table.update_cell(cursor_row, "Select", checkbox)
 
-    def _update_item_ui(self, key, match, label, selected) -> None:
-        """Update a single item's UI state."""
-        checkbox_mark = "[X]" if selected else "[ ]"
-        size_str = FileOperations.format_size(match.target_size)
-        label.update(f"  {checkbox_mark} {match.source_file.filename} → {match.target_path} ({size_str})")
-        if selected:
-            label.add_class("file-selected")
-            label.remove_class("file-unselected")
-        else:
-            label.add_class("file-unselected")
-            label.remove_class("file-selected")
-
-    def action_select_all(self) -> None:
+    async def action_select_all(self) -> None:
         """Select all duplicates."""
-        for idx, (key, match, label) in self.item_map.items():
+        table = self.query_one("#dup-table", DataTable)
+
+        for row_idx, (key, match) in self.row_map.items():
             self.current_selections[key] = True
-            self._update_item_ui(key, match, label, True)
-    
-    def action_deselect_all(self) -> None:
+            # Update the table row directly
+            row_key = f"row-{row_idx}"
+            try:
+                table.update_cell(row_key, "Select", "[X]")
+            except Exception:
+                pass
+
+    async def action_deselect_all(self) -> None:
         """Deselect all duplicates."""
-        for idx, (key, match, label) in self.item_map.items():
+        table = self.query_one("#dup-table", DataTable)
+
+        for row_idx, (key, match) in self.row_map.items():
             self.current_selections[key] = False
-            self._update_item_ui(key, match, label, False)
-    
+            # Update the table row directly
+            row_key = f"row-{row_idx}"
+            try:
+                table.update_cell(row_key, "Select", "[ ]")
+            except Exception:
+                pass
+
     def action_go_back(self) -> None:
         """Go back to previous screen."""
         self._close_db()
         self.app.pop_screen()
-    
+
     def action_quit(self) -> None:
         """Quit the application."""
         self._close_db()
