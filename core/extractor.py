@@ -157,6 +157,9 @@ class ArchiveExtractor:
         Yields:
             (path_in_archive, file_stream, size, is_nested_archive)
         """
+        if recursion_depth == 0:
+            logger.info(f"Analyzing archive: {archive_path}")
+            
         if recursion_depth > self.max_recursion_depth:
             logger.warning(f"Max recursion depth reached for {archive_path}")
             return
@@ -675,7 +678,7 @@ class ArchiveExtractor:
                     f.seek(0)
                     offset = self._find_magic_offset(f, magic)
                     if offset is not None and offset > 0: # If offset is 0, it's already what we tried
-                        logger.debug(f"Found embedded {extension[1:]} format at offset {offset}")
+                        logger.info(f"Found embedded {extension[1:]} format at offset {offset}")
                         
                         with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as embedded_tmp:
                             f.seek(offset)
@@ -837,6 +840,7 @@ class ArchiveExtractor:
 
     def _extract_nested(self, temp_path: str, original_name: str, parent_recursion_depth: int) -> Generator:
         """Helper to extract nested archives with proper path tracking."""
+        logger.info(f"Extracting subarchive: {original_name}")
         for nested_rel_path, nested_stream, nested_size, nested_is_archive in self.extract_archive(temp_path, parent_recursion_depth + 1):
             # Combine paths: parent_archive/nested_file
             combined_path = f"{original_name}/{nested_rel_path}"
