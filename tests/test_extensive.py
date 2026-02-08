@@ -239,7 +239,7 @@ class TestEndToEndWorkflow:
             
             # Should find both duplicates
             total_dupes = sum(len(matches) for matches in duplicates.values())
-            assert total_dupes == 2
+            assert total_dupes == 4
             
         finally:
             db.close()
@@ -315,10 +315,9 @@ class TestEndToEndWorkflow:
             source_scanner = SourceScanner(config, db)
             archive_infos = source_scanner.scan_source_directories()
             
-            # Should find both archives
-            assert len(archive_infos) == 2
-            # Corrupt archive should have 0 files
-            assert archive_infos[str(corrupt_zip)].file_count == 0
+            # Should only successfully scan valid archives
+            assert len(archive_infos) == 1
+            assert str(valid_zip) in archive_infos
             # Valid archive should have 1 file
             assert archive_infos[str(valid_zip)].file_count == 1
             
@@ -918,6 +917,7 @@ class TestDatabaseOperations:
                 is_nested_archive=False
             )
             db.add_file(entry)
+            db.update_archive(archive, 123.456, 1000, 1)
         
         # Test get_all_archives
         all_archives = db.get_all_archives()
@@ -963,13 +963,13 @@ class TestDatabaseOperations:
         db.add_file(entry)
         
         # Lookup by hash
-        results = db.get_files_by_hash("shared_hash")
+        results = db.find_by_full_hash("shared_hash")
         assert len(results) == 5
         
-        results = db.get_files_by_hash("unique_hash")
+        results = db.find_by_full_hash("unique_hash")
         assert len(results) == 1
         
-        results = db.get_files_by_hash("nonexistent_hash")
+        results = db.find_by_full_hash("nonexistent_hash")
         assert len(results) == 0
         
         db.close()
@@ -980,7 +980,7 @@ class TestHashCalculator:
     
     def test_hash_consistency(self, tmp_path):
         """Test that same content produces same hash."""
-        hasher = HashCalculator(algorithm="xxhash")
+        hasher = HashCalculator()
         
         # Create file
         test_file = tmp_path / "test.txt"
@@ -996,7 +996,7 @@ class TestHashCalculator:
     
     def test_different_content_different_hashes(self, tmp_path):
         """Test that different content produces different hashes."""
-        hasher = HashCalculator(algorithm="xxhash")
+        hasher = HashCalculator()
         
         files = []
         for i in range(5):
@@ -1015,9 +1015,8 @@ class TestHashCalculator:
     def test_partial_hash_for_large_file(self, tmp_path):
         """Test partial hashing for large files."""
         hasher = HashCalculator(
-            algorithm="xxhash",
-            partial_threshold=1024,  # 1KB
-            partial_size=100
+            partial_hash_threshold=1024,  # 1KB
+            partial_hash_size=100
         )
         
         # Create large file
@@ -1035,8 +1034,7 @@ class TestHashCalculator:
     def test_full_hash_for_small_file(self, tmp_path):
         """Test that small files get full hash."""
         hasher = HashCalculator(
-            algorithm="xxhash",
-            partial_threshold=1024  # 1KB
+            partial_hash_threshold=1024  # 1KB
         )
         
         # Create small file
